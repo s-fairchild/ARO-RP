@@ -12,10 +12,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Azure/ARO-RP/pkg/api"
-	"github.com/Azure/ARO-RP/pkg/database/cosmosdb"
 	"github.com/sirupsen/logrus"
 	"github.com/ugorji/go/codec"
+
+	"github.com/Azure/ARO-RP/pkg/api"
+	"github.com/Azure/ARO-RP/pkg/database/cosmosdb"
 )
 
 func TestNewMonitors(t *testing.T) {
@@ -26,22 +27,22 @@ func TestNewMonitors(t *testing.T) {
 		name    string
 		wantErr string
 		dbName  string
-		status int
+		status  int
 	}{
 		{
-			name: "pass: create new monitors",
+			name:   "pass: create new monitors",
 			status: http.StatusCreated,
 			dbName: "testdb",
 		},
 		{
-			name: "fail: DATABASE_NAME is unset",
+			name:    "fail: DATABASE_NAME is unset",
 			wantErr: "environment variable \"DATABASE_NAME\" unset (development mode)",
 		},
 		{
-			name: "fail: http status conflict",
+			name:    "fail: http status conflict",
 			wantErr: "404 : ",
-			dbName: "testdb",
-			status: http.StatusNotFound,
+			dbName:  "testdb",
+			status:  http.StatusNotFound,
 		},
 	} {
 		if tt.dbName != "" {
@@ -55,7 +56,7 @@ func TestNewMonitors(t *testing.T) {
 				t.Logf("Resource not found: %s", r.URL.String())
 			}
 		}))
-		
+
 		host := strings.SplitAfter(ts.URL, "//")
 
 		dbc := cosmosdb.NewDatabaseClient(log, ts.Client(), &codec.JsonHandle{}, host[1], nil)
@@ -81,8 +82,8 @@ func TestMonitorsCreate(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
 		wantErr string
-		status int
-		doc *api.MonitorDocument
+		status  int
+		doc     *api.MonitorDocument
 	}{
 		{
 			name: "fail: id isn't lowercase",
@@ -90,14 +91,14 @@ func TestMonitorsCreate(t *testing.T) {
 				ID: "UPPER",
 			},
 			wantErr: "id \"UPPER\" is not lower case",
-			status: http.StatusCreated,
+			status:  http.StatusCreated,
 		},
 		{
 			name: "fail: http status conflict",
 			doc: &api.MonitorDocument{
 				ID: "id-1",
 			},
-			status: http.StatusConflict,
+			status:  http.StatusConflict,
 			wantErr: "412 : ",
 		},
 	} {
@@ -105,12 +106,12 @@ func TestMonitorsCreate(t *testing.T) {
 			if r.URL.String() == "/dbs/testdb/colls/Monitors/triggers" {
 				w.WriteHeader(http.StatusCreated)
 			} else if r.URL.String() == "/dbs/testdb/colls/Monitors/docs" {
-				w.WriteHeader(tt.status)	
+				w.WriteHeader(tt.status)
 			} else {
 				t.Logf("Resource not found: %s", r.URL.String())
 			}
 		}))
-		
+
 		host := strings.SplitAfter(ts.URL, "//")
 
 		dbc := cosmosdb.NewDatabaseClient(log, ts.Client(), &codec.JsonHandle{}, host[1], nil)
@@ -136,20 +137,21 @@ func TestMonitorsPatchWithLease(t *testing.T) {
 	t.Setenv("DATABASE_NAME", "testdb")
 
 	for _, tt := range []struct {
-		name    string
-		wantErr string
-		status int
-		doc *api.MonitorDocument
-		f func(*api.MonitorDocument) error
+		name      string
+		wantErr   string
+		status    int
+		doc       *api.MonitorDocument
+		f         func(*api.MonitorDocument) error
+		failUpper bool
 	}{
 		{
 			name: "fail: lost lease",
 			doc: &api.MonitorDocument{
-				ID: "id-1",
+				ID:         "id-1",
 				LeaseOwner: "different-uuid",
 			},
-			f: func (doc *api.MonitorDocument) error {
-				return nil	
+			f: func(doc *api.MonitorDocument) error {
+				return nil
 			},
 			wantErr: "lost lease",
 		},
@@ -162,11 +164,11 @@ func TestMonitorsPatchWithLease(t *testing.T) {
 		},
 		{
 			name: "pass: Patch with lease",
-			f: func (doc *api.MonitorDocument) error {
-				return nil	
+			f: func(doc *api.MonitorDocument) error {
+				return nil
 			},
 			doc: &api.MonitorDocument{
-				ID: "master",
+				ID:   "master",
 				ETag: "tag",
 			},
 		},
@@ -178,10 +180,10 @@ func TestMonitorsPatchWithLease(t *testing.T) {
 			case "/dbs/testdb/colls/Monitors/docs":
 				buf := &bytes.Buffer{}
 				err := codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(&api.MonitorDocuments{
-						MonitorDocuments: []*api.MonitorDocument{
-							tt.doc,
-						},
+					MonitorDocuments: []*api.MonitorDocument{
+						tt.doc,
 					},
+				},
 				)
 				if err != nil {
 					t.Fatalf("\n%s\nfailed to encode document to request body\n%v\n", tt.name, err)
@@ -191,17 +193,8 @@ func TestMonitorsPatchWithLease(t *testing.T) {
 				w.Header().Set("x-ms-version", "2018-12-31")
 
 				w.Write(buf.Bytes())
-			case "/dbs/testdb/colls/Monitors/docs/"+tt.doc.ID:
-				// use c.uuid from TryLease request to return doc with c.uuid as LeaseOwner
-				if r.Body != http.NoBody {
-					var newDoc *api.MonitorDocument
-					err := codec.NewDecoder(r.Body, &codec.JsonHandle{}).Decode(&newDoc)
-					if err != nil {
-						t.Fatalf("\n%s\nfailed to decode document from request body\n%v\n", tt.name, err)
-					}
-					tt.doc = newDoc
-				}
-
+			case "/dbs/testdb/colls/Monitors/docs/" + tt.doc.ID:
+				tt.doc = tryLeaseGetDoc(&w, r, t, tt.doc, tt.name)
 				buf := &bytes.Buffer{}
 				err := codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(tt.doc)
 				if err != nil {
@@ -215,7 +208,7 @@ func TestMonitorsPatchWithLease(t *testing.T) {
 				t.Logf("Resource not found: %s", r.URL.String())
 			}
 		}))
-		
+
 		host := strings.SplitAfter(ts.URL, "//")
 
 		dbc := cosmosdb.NewDatabaseClient(log, ts.Client(), &codec.JsonHandle{}, host[1], nil)
@@ -240,4 +233,22 @@ func TestMonitorsPatchWithLease(t *testing.T) {
 			}
 		})
 	}
+}
+
+//TODO write test for TryLease that fails id isn't lowercase in c.update using tryLeaseGetDoc
+// ListBuckets
+// ListMonitors
+// MonitorHeartbeat
+
+// tryLeaseGetDoc use c.uuid from TryLease request to return doc with c.uuid as LeaseOwner
+func tryLeaseGetDoc(w *http.ResponseWriter, r *http.Request, t *testing.T, doc *api.MonitorDocument, n string) *api.MonitorDocument {
+	if r.Body != http.NoBody {
+		var newDoc *api.MonitorDocument
+		err := codec.NewDecoder(r.Body, &codec.JsonHandle{}).Decode(&newDoc)
+		if err != nil {
+			t.Fatalf("\n%s\nfailed to decode document from request body\n%v\n", n, err)
+		}
+		return newDoc
+	}
+	return doc
 }
