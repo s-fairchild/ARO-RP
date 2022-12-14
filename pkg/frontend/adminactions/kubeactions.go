@@ -29,7 +29,7 @@ type KubeActions interface {
 	KubeGet(ctx context.Context, groupKind, namespace, name string) ([]byte, error)
 	KubeList(ctx context.Context, groupKind, namespace string) ([]byte, error)
 	KubeCreateOrUpdate(ctx context.Context, obj *unstructured.Unstructured) error
-	KubeDelete(ctx context.Context, groupKind, namespace, name string, force bool) error
+	KubeDelete(ctx context.Context, groupKind, namespace, name string, force bool, propagationPolicy *metav1.DeletionPropagation) error
 	ResolveGVR(groupKind string) (*schema.GroupVersionResource, error)
 	CordonNode(ctx context.Context, nodeName string, unschedulable bool) error
 	DrainNode(ctx context.Context, nodeName string) error
@@ -149,7 +149,7 @@ func (k *kubeActions) KubeCreateOrUpdate(ctx context.Context, o *unstructured.Un
 	return err
 }
 
-func (k *kubeActions) KubeDelete(ctx context.Context, groupKind, namespace, name string, force bool) error {
+func (k *kubeActions) KubeDelete(ctx context.Context, groupKind, namespace, name string, force bool, propagationPolicy *metav1.DeletionPropagation) error {
 	gvr, err := k.gvrResolver.Resolve(groupKind, "")
 	if err != nil {
 		return err
@@ -158,6 +158,10 @@ func (k *kubeActions) KubeDelete(ctx context.Context, groupKind, namespace, name
 	resourceDeleteOptions := metav1.DeleteOptions{}
 	if force {
 		resourceDeleteOptions.GracePeriodSeconds = to.Int64Ptr(0)
+	}
+
+	if propagationPolicy != nil {
+		resourceDeleteOptions.PropagationPolicy = propagationPolicy
 	}
 
 	return k.dyn.Resource(*gvr).Namespace(namespace).Delete(ctx, name, resourceDeleteOptions)
