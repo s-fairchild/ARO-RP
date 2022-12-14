@@ -27,6 +27,7 @@ import (
 	"github.com/Azure/ARO-RP/pkg/operator/controllers/checkers/serviceprincipalchecker"
 	"github.com/Azure/ARO-RP/pkg/operator/controllers/clusteroperatoraro"
 	"github.com/Azure/ARO-RP/pkg/operator/controllers/dnsmasq"
+	"github.com/Azure/ARO-RP/pkg/operator/controllers/etcdfix"
 	"github.com/Azure/ARO-RP/pkg/operator/controllers/genevalogging"
 	"github.com/Azure/ARO-RP/pkg/operator/controllers/imageconfig"
 	"github.com/Azure/ARO-RP/pkg/operator/controllers/ingress"
@@ -230,6 +231,11 @@ func operator(ctx context.Context, log *logrus.Entry) error {
 			log.WithField("controller", ingresscertificatechecker.ControllerName),
 			client, role)).SetupWithManager(mgr); err != nil {
 			return fmt.Errorf("unable to create controller %s: %v", ingresscertificatechecker.ControllerName, err)
+		}
+		if err = (etcdfix.NewReconciler(
+			log.WithField("controller", etcdfix.ControllerName),
+			arocli, restConfig, securitycli)).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("unable to create controller %s: %v", etcdfix.ControllerName, err)
 		}
 	}
 
