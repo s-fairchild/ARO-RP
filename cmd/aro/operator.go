@@ -234,7 +234,7 @@ func operator(ctx context.Context, log *logrus.Entry) error {
 		}
 		if err = (etcdfix.NewReconciler(
 			log.WithField("controller", etcdfix.ControllerName),
-			operatorcli, restConfig, securitycli)).SetupWithManager(mgr); err != nil {
+			restConfig, securitycli)).SetupWithManager(mgr); err != nil {
 			return fmt.Errorf("unable to create controller %s: %v", etcdfix.ControllerName, err)
 		}
 	}

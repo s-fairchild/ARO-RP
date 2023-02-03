@@ -240,6 +240,7 @@ func (o *operator) resources() ([]kruntime.Object, error) {
 					o.env.Environment().ActiveDirectoryEndpoint,
 					o.env.Environment().ResourceManagerEndpoint,
 					o.env.Environment().GenevaMonitoringEndpoint,
+					o.env.Environment().SQLDatabaseDNSSuffix,
 				},
 			},
 

@@ -223,6 +223,10 @@ type AuditConfig struct {
 	WebHookMode WebHookModeType `json:"webHookMode"`
 }
 
+// +genclient
+// +genclient:nonNamespaced
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
 // EtcdConnectionInfo holds information necessary for connecting to an etcd server
 type EtcdConnectionInfo struct {
 	// URLs are the URLs for etcd
