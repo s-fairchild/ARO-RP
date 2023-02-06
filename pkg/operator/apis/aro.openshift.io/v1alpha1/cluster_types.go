@@ -155,6 +155,35 @@ type ClusterList struct {
 	Items           []Cluster `json:"items"`
 }
 
+// EtcdConnectionInfo holds information necessary for connecting to an etcd server
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+type EtcdConnectionInfo struct {
+	// URLs are the URLs for etcd
+	URLs []string `json:"urls,omitempty"`
+	// CA is a file containing trusted roots for the etcd server certificates
+	CA string `json:"ca"`
+	// CertInfo is the TLS client cert information for securing communication to etcd
+	// this is anonymous so that we can inline it for serialization
+	CertInfo `json:",inline"`
+}
+
+// CertInfo relates a certificate with a private key
+type CertInfo struct {
+	// CertFile is a file containing a PEM-encoded certificate
+	CertFile string `json:"certFile"`
+	// KeyFile is a file containing a PEM-encoded private key for the certificate specified by CertFile
+	KeyFile string `json:"keyFile"`
+}
+
+type EtcdStorageConfig struct {
+	EtcdConnectionInfo `json:",inline"`
+
+	// StoragePrefix is the path within etcd that the OpenShift resources will
+	// be rooted under. This value, if changed, will mean existing objects in etcd will
+	// no longer be located.
+	StoragePrefix string `json:"storagePrefix"`
+}
+
 func init() {
 	SchemeBuilder.Register(&Cluster{}, &ClusterList{})
 }
