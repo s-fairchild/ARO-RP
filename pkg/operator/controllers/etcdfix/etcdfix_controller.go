@@ -66,30 +66,6 @@ func (r *Reconciler) deploy(ctx context.Context, instance *arov1alpha1.Cluster) 
 		return reconcile.Result{}, err
 	}
 
-	resources, err := r.resources(ctx, instance)
-	if err != nil {
-		r.log.Error(err)
-		return reconcile.Result{}, err
-	}
-
-	err = dynamichelper.SetControllerReferences(resources, instance)
-	if err != nil {
-		r.log.Error(err)
-		return reconcile.Result{}, err
-	}
-
-	err = dynamichelper.Prepare(resources)
-	if err != nil {
-		r.log.Error(err)
-		return reconcile.Result{}, err
-	}
-
-	err = r.dynamicHelper.Ensure(ctx, resources...)
-	if err != nil {
-		r.log.Error(err)
-		return reconcile.Result{}, err
-	}
-
 	return reconcile.Result{}, nil
 }
 
