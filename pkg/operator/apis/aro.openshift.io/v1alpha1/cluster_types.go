@@ -148,9 +148,6 @@ type Cluster struct {
 // +kubebuilder:object:root=true
 
 // ClusterList contains a list of Cluster
-// +genclient
-// +genclient:nonNamespaced
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type ClusterList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
@@ -158,8 +155,6 @@ type ClusterList struct {
 }
 
 // EtcdConnectionInfo holds information necessary for connecting to an etcd server
-// +genclient
-// +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type EtcdConnectionInfo struct {
 	// URLs are the URLs for etcd
@@ -172,8 +167,6 @@ type EtcdConnectionInfo struct {
 }
 
 // CertInfo relates a certificate with a private key
-// +genclient
-// +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type CertInfo struct {
 	// CertFile is a file containing a PEM-encoded certificate
@@ -182,6 +175,7 @@ type CertInfo struct {
 	KeyFile string `json:"keyFile"`
 }
 
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type EtcdStorageConfig struct {
 	EtcdConnectionInfo `json:",inline"`
 
