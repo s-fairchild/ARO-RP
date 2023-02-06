@@ -52,8 +52,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 		return reconcile.Result{}, err
 	}
 
-	// etcdConnInfo := &configv1.EtcdConnectionInfo{}
-	// err = r.client.Get(ctx, types.NamespacedName{Name: request.Name}, etcdConnInfo)
+	etcdConnInfo := &arov1alpha1.EtcdConnectionInfo{}
+	err = r.client.Get(ctx, types.NamespacedName{Name: request.Name}, etcdConnInfo)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
