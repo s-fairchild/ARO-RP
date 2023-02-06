@@ -155,7 +155,6 @@ type ClusterList struct {
 }
 
 // EtcdConnectionInfo holds information necessary for connecting to an etcd server
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type EtcdConnectionInfo struct {
 	// URLs are the URLs for etcd
 	URLs []string `json:"urls,omitempty"`
@@ -167,7 +166,6 @@ type EtcdConnectionInfo struct {
 }
 
 // CertInfo relates a certificate with a private key
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type CertInfo struct {
 	// CertFile is a file containing a PEM-encoded certificate
 	CertFile string `json:"certFile"`
@@ -175,7 +173,6 @@ type CertInfo struct {
 	KeyFile string `json:"keyFile"`
 }
 
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type EtcdStorageConfig struct {
 	EtcdConnectionInfo `json:",inline"`
 
