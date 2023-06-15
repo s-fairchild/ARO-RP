@@ -25,8 +25,8 @@ import (
 
 const degradedNode = "master-2"
 
-// TODO fix tests
 func TestFixEtcd(t *testing.T) {
+	// TODO inject timeout duration
 	ctx := context.WithValue(context.Background(), ctxKey, "TRUE")
 
 	const (
@@ -192,7 +192,7 @@ func TestFixEtcd(t *testing.T) {
 		},
 		{
 			name:    "fail: Multiple degraded etcd instances scenario",
-			wantErr: "only a single degraded quorum is supported, more than one not Ready etcd pods were found: [etcd-cluster-zfsbk-master-2 etcd etcd]",
+			wantErr: "only a single degraded etcd pod can can be recovered from, more than one NotReady etcd pods were found: [etcd-cluster-zfsbk-master-0 etcd-cluster-zfsbk-master-1 etcd-cluster-zfsbk-master-2]",
 			pods:    newDegradedPods(doc, true, true),
 			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList) {
 				buf := &bytes.Buffer{}
@@ -472,13 +472,22 @@ func buildNodeName(doc *api.OpenShiftClusterDocument, node string) string {
 	return c + "-" + node
 }
 
+// TODO fix degraded pods to not create multiple conflicts every time
 func newDegradedPods(doc *api.OpenShiftClusterDocument, multiDegraded, emptyEnv bool) *corev1.PodList {
 	var (
-		nodeName  = buildNodeName(doc, degradedNode)
-		master0IP = "10.0.0.1"
-		master1IP = "10.0.0.2"
-		master2IP = "10.0.0.3"
+		degradedNodeMaster2 = buildNodeName(doc, degradedNode)
+		nodeMaster0         = buildNodeName(doc, "master-0")
+		nodeMaster1         = buildNodeName(doc, "master-1")
 	)
+	const (
+		master0IP        = "10.0.0.1"
+		master1IP        = "10.0.0.2"
+		master2IP        = "10.0.0.3"
+		master2ChangedIP = "10.0.0.9"
+	)
+
+	// Used to test scenario when etcd's env vars are empty, or there is no conflict found
+	// then statuses will be tests
 	envs := []corev1.EnvVar{
 		{
 			Name:  "NODE_" + doc.OpenShiftCluster.Name + "_" + doc.OpenShiftCluster.Properties.InfraID + "_master_0_IP",
@@ -489,14 +498,10 @@ func newDegradedPods(doc *api.OpenShiftClusterDocument, multiDegraded, emptyEnv 
 			Value: master1IP,
 		},
 		{
-			// degraded pod
 			Name:  "NODE_" + doc.OpenShiftCluster.Name + "_" + doc.OpenShiftCluster.Properties.InfraID + "_master_2_IP",
 			Value: master2IP,
 		},
 	}
-
-	// Used to test scenario when etcd's env vars are empty, or there is no conflict found
-	// then statuses will be tests
 	if emptyEnv {
 		envs = []corev1.EnvVar{}
 	}
@@ -515,9 +520,9 @@ func newDegradedPods(doc *api.OpenShiftClusterDocument, multiDegraded, emptyEnv 
 		},
 	}
 
-	etcd2Statuses := []corev1.ContainerStatus{}
+	statuses := []corev1.ContainerStatus{}
 	if multiDegraded {
-		etcd2Statuses = badStatus
+		statuses = badStatus
 	}
 
 	return &corev1.PodList{
@@ -525,29 +530,73 @@ func newDegradedPods(doc *api.OpenShiftClusterDocument, multiDegraded, emptyEnv 
 			Kind: "Etcd",
 		},
 		Items: []corev1.Pod{
-			// IP mismatch container
+			// healthy pod
 			{
 				TypeMeta: metav1.TypeMeta{},
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "etcd-" + nodeName,
+					Name:      "etcd-" + nodeMaster0,
+					Namespace: namespaceEtcds,
+				},
+				Status: corev1.PodStatus{
+					ContainerStatuses: statuses,
+					PodIPs: []corev1.PodIP{
+						{
+							IP: master0IP,
+						},
+					},
+				},
+				Spec: corev1.PodSpec{
+					NodeName: nodeMaster0,
+					Containers: []corev1.Container{
+						{
+							Name: "etcd",
+							Env:  envs,
+						},
+					},
+				},
+			},
+			// healthy pod
+			{
+				TypeMeta: metav1.TypeMeta{},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "etcd-" + nodeMaster1,
+					Namespace: namespaceEtcds,
+				},
+				Status: corev1.PodStatus{
+					ContainerStatuses: statuses,
+					PodIPs: []corev1.PodIP{
+						{
+							IP: master1IP,
+						},
+					},
+				},
+				Spec: corev1.PodSpec{
+					NodeName: nodeMaster1,
+					Containers: []corev1.Container{
+						{
+							Name: "etcd",
+							Env:  envs,
+						},
+					},
+				},
+			},
+			// degraded pod
+			{
+				TypeMeta: metav1.TypeMeta{},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "etcd-" + degradedNodeMaster2,
 					Namespace: namespaceEtcds,
 				},
 				Status: corev1.PodStatus{
 					ContainerStatuses: badStatus,
 					PodIPs: []corev1.PodIP{
 						{
-							IP: master0IP,
-						},
-						{
-							IP: master1IP,
-						},
-						{
-							IP: master2IP,
+							IP: master2ChangedIP,
 						},
 					},
 				},
 				Spec: corev1.PodSpec{
-					NodeName: nodeName,
+					NodeName: degradedNodeMaster2,
 					Containers: []corev1.Container{
 						{
 							Name: "etcd",
@@ -556,45 +605,5 @@ func newDegradedPods(doc *api.OpenShiftClusterDocument, multiDegraded, emptyEnv 
 					},
 				},
 			},
-			{
-				TypeMeta: metav1.TypeMeta{},
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "etcd",
-					Namespace: namespaceEtcds,
-				},
-				Status: corev1.PodStatus{
-					ContainerStatuses: etcd2Statuses,
-				},
-				Spec: corev1.PodSpec{
-					NodeName: "master-1",
-					// healthy container
-					Containers: []corev1.Container{
-						{
-							Name: "etcd",
-							Env:  envs,
-						},
-					},
-				},
-			},
-			{
-				TypeMeta: metav1.TypeMeta{},
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "etcd",
-				},
-				Status: corev1.PodStatus{
-					ContainerStatuses: etcd2Statuses,
-				},
-				Spec: corev1.PodSpec{
-					NodeName: "master-0",
-					// healthy container
-					Containers: []corev1.Container{
-						{
-							Name: "etcd",
-							Env:  envs,
-						},
-					},
-				},
-			},
-		},
-	}
+		}}
 }

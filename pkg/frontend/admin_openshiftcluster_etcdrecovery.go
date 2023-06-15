@@ -30,10 +30,8 @@ func (f *frontend) postAdminOpenShiftClusterEtcdRecovery(w http.ResponseWriter, 
 }
 
 func (f *frontend) _postAdminOpenShiftClusterEtcdRecovery(ctx context.Context, r *http.Request, log *logrus.Entry) error {
-	var err error
 	resType, resName, resGroupName := chi.URLParam(r, "resourceType"), chi.URLParam(r, "resourceName"), chi.URLParam(r, "resourceGroupName")
 	resourceID := strings.TrimPrefix(r.URL.Path, "/admin")
-	groupKind := "Etcd"
 
 	doc, err := f.dbOpenShiftClusters.Get(ctx, resourceID)
 	switch {
@@ -47,7 +45,7 @@ func (f *frontend) _postAdminOpenShiftClusterEtcdRecovery(ctx context.Context, r
 		return err
 	}
 
-	gvr, err := kubeActions.ResolveGVR(groupKind)
+	gvr, err := kubeActions.ResolveGVR("Etcd")
 	if err != nil {
 		return err
 	}

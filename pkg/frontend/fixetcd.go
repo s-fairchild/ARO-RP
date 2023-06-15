@@ -587,20 +587,36 @@ func adjustTimeout(ctx context.Context, log *logrus.Entry) time.Duration {
 
 // comparePodEnvToIp compares the etcd container's environment variables to the pod's actual IP address
 func comparePodEnvToIP(log *logrus.Entry, pods *corev1.PodList) (*degradedEtcd, error) {
-	de := &degradedEtcd{}
+	degradedEtcds := []degradedEtcd{}
 	for _, p := range pods.Items {
-		etcdIP := ipFromEnv(p.Spec.Containers, p.Name)
-		for _, ip := range p.Status.PodIPs {
-			if ip.IP != etcdIP && etcdIP != "" {
-				log.Infof("Found conflicting IPs for etcd Pod %s: %s!=%s", p.Name, ip.IP, etcdIP)
-				de.Node = strings.ReplaceAll(p.Name, "etcd-", "")
-				de.Pod = p.Name
-				de.NewIP = ip.IP
-				de.OldIP = etcdIP
+		envIP := ipFromEnv(p.Spec.Containers, p.Name)
+		for _, podIP := range p.Status.PodIPs {
+			if podIP.IP != envIP && envIP != "" {
+				log.Infof("Found conflicting IPs for etcd Pod %s: %s!=%s", p.Name, podIP.IP, envIP)
+				degradedEtcds = append(degradedEtcds, degradedEtcd{
+					Node:  strings.ReplaceAll(p.Name, "etcd-", ""),
+					Pod:   p.Name,
+					NewIP: podIP.IP,
+					OldIP: envIP,
+				})
+				break
 			}
 		}
 	}
 
+	// Check for multiple etcd pods with IP address conflicts
+	var de *degradedEtcd
+	if len(degradedEtcds) > 1 {
+		return nil, fmt.Errorf("found multiple etcd pods with conflicting IP addresses, only one degraded etcd is supported, unable to recover. Conflicting IPs found: %v", degradedEtcds)
+		// happens if the env variables are empty, check statuses next
+	} else if len(degradedEtcds) == 0 {
+		de = &degradedEtcd{}
+	} else {
+		// array is no longer needed
+		de = &degradedEtcds[0]
+	}
+
+	// TODO check statuses in addition to conflict, currently statuses are only checked if the env variable is equal to ""
 	// If no conflict is found a recent IP change may still be causing an issue
 	// Sometimes etcd can recovery the deployment itself, however there is still a data directory with the previous member's IP address present causing a failure
 	// This can still be remediated by relying on the pod statuses
@@ -626,9 +642,9 @@ func ipFromEnv(containers []corev1.Container, podName string) string {
 		if c.Name == "etcd" {
 			for _, e := range c.Env {
 				// The environment variable that contains etcd's IP address has the following naming convention
-				// NODE_cluster_name_c4j2v_master_0_IP
+				// NODE_cluster_name_infra_ID_master_0_IP
 				// while the pod looks like this
-				// etcd-cluster-name-c4j2v-master-0
+				// etcd-cluster-name-infra-id-master-0
 				// To find the pod's IP address by variable name we use the pod's name
 				envName := strings.ReplaceAll(strings.ReplaceAll(podName, "-", "_"), "etcd_", "NODE_")
 				if e.Name == fmt.Sprintf("%s_IP", envName) {
@@ -637,6 +653,7 @@ func ipFromEnv(containers []corev1.Container, podName string) string {
 			}
 		}
 	}
+
 	return ""
 }
 
@@ -660,7 +677,7 @@ func findCrashloopingPods(log *logrus.Entry, pods *corev1.PodList) (*corev1.Pod,
 		for _, c := range crashingPods.Items {
 			names = append(names, c.Name)
 		}
-		return nil, fmt.Errorf("only a single degraded quorum is supported, more than one not Ready etcd pods were found: %v", names)
+		return nil, fmt.Errorf("only a single degraded etcd pod can can be recovered from, more than one NotReady etcd pods were found: %v", names)
 	} else if len(crashingPods.Items) == 0 {
 		return nil, errors.New("no etcd pod's were found in a CrashLoopBackOff state, unable to remediate etcd deployment")
 	}
