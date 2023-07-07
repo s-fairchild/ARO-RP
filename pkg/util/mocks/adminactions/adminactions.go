@@ -17,6 +17,7 @@ import (
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	unstructured "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
+	watch "k8s.io/apimachinery/pkg/watch"
 )
 
 // MockKubeActions is a mock of KubeActions interface.
@@ -169,6 +170,21 @@ func (m *MockKubeActions) KubeList(arg0 context.Context, arg1, arg2 string) ([]b
 func (mr *MockKubeActionsMockRecorder) KubeList(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "KubeList", reflect.TypeOf((*MockKubeActions)(nil).KubeList), arg0, arg1, arg2)
+}
+
+// KubeWatch mocks base method.
+func (m *MockKubeActions) KubeWatch(arg0 context.Context, arg1 *unstructured.Unstructured, arg2 string) (watch.Interface, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "KubeWatch", arg0, arg1, arg2)
+	ret0, _ := ret[0].(watch.Interface)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// KubeWatch indicates an expected call of KubeWatch.
+func (mr *MockKubeActionsMockRecorder) KubeWatch(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "KubeWatch", reflect.TypeOf((*MockKubeActions)(nil).KubeWatch), arg0, arg1, arg2)
 }
 
 // ResolveGVR mocks base method.

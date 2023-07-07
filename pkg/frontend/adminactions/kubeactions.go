@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/apimachinery/pkg/watch"
 
 	"github.com/Azure/ARO-RP/pkg/api"
 	"github.com/Azure/ARO-RP/pkg/env"
@@ -37,6 +38,8 @@ type KubeActions interface {
 	ApproveAllCsrs(ctx context.Context) error
 	Upgrade(ctx context.Context, upgradeY bool) error
 	KubeGetPodLogs(ctx context.Context, namespace, name, containerName string) ([]byte, error)
+	// kubeWatch returns a watch object for the provided label selector key
+	KubeWatch(ctx context.Context, o *unstructured.Unstructured, label string) (watch.Interface, error)
 }
 
 type kubeActions struct {
@@ -147,6 +150,27 @@ func (k *kubeActions) KubeCreateOrUpdate(ctx context.Context, o *unstructured.Un
 
 	_, err = k.dyn.Resource(*gvr).Namespace(o.GetNamespace()).Create(ctx, o, metav1.CreateOptions{})
 	return err
+}
+
+func (k *kubeActions) KubeWatch(ctx context.Context, o *unstructured.Unstructured, labelKey string) (watch.Interface, error) {
+	gvr, err := k.gvrResolver.Resolve(o.GroupVersionKind().GroupKind().String(), o.GroupVersionKind().Version)
+	if err != nil {
+		return nil, err
+	}
+
+	listOpts := metav1.ListOptions{
+		Limit: 1000, // just in case
+	}
+	if labelKey != "" {
+		listOpts.LabelSelector = o.GetLabels()[labelKey]
+	}
+
+	w, err := k.dyn.Resource(*gvr).Namespace(o.GetNamespace()).Watch(ctx, listOpts)
+	if err != nil {
+		return nil, err
+	}
+
+	return w, nil
 }
 
 func (k *kubeActions) KubeDelete(ctx context.Context, groupKind, namespace, name string, force bool, propagationPolicy *metav1.DeletionPropagation) error {

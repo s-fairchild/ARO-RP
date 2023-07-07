@@ -26,9 +26,7 @@ import (
 const degradedNode = "master-2"
 
 func TestFixEtcd(t *testing.T) {
-	// TODO inject timeout duration
-	ctx := context.WithValue(context.Background(), ctxKey, "TRUE")
-
+	ctx := context.Background()
 	const (
 		mockSubID    = "00000000-0000-0000-0000-000000000000"
 		mockTenantID = "00000000-0000-0000-0000-000000000000"
@@ -472,7 +470,6 @@ func buildNodeName(doc *api.OpenShiftClusterDocument, node string) string {
 	return c + "-" + node
 }
 
-// TODO fix degraded pods to not create multiple conflicts every time
 func newDegradedPods(doc *api.OpenShiftClusterDocument, multiDegraded, emptyEnv bool) *corev1.PodList {
 	var (
 		degradedNodeMaster2 = buildNodeName(doc, degradedNode)
