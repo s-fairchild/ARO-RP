@@ -160,9 +160,7 @@ func (k *kubeActions) KubeWatch(ctx context.Context, o *unstructured.Unstructure
 
 	listOpts := metav1.ListOptions{
 		Limit: 1000, // just in case
-	}
-	if labelKey != "" {
-		listOpts.LabelSelector = o.GetLabels()[labelKey]
+		LabelSelector: o.GetLabels()[labelKey],
 	}
 
 	w, err := k.dyn.Resource(*gvr).Namespace(o.GetNamespace()).Watch(ctx, listOpts)

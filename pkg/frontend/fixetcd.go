@@ -281,13 +281,21 @@ func fixPeers(ctx context.Context, log *logrus.Entry, de *degradedEtcd, pods *co
 		return err
 	}
 
-	log.Infof("Waiting for %s", jobNameFixPeers)
+	watcher, err := kubeActions.KubeWatch(ctx, jobFixPeers, "app")
+	if err != nil {
+		return err
+	}
+
 	select {
-	case <-time.After(time.Minute):
-		log.Infof("Finished waiting for job %s", jobNameFixPeers)
-		break
+	case event := <-watcher.ResultChan():
+		log.Infof("Waiting for %s to reach %s phase", jobFixPeers.GetName(), corev1.PodSucceeded)
+		pod := event.Object.(*corev1.Pod)
+
+		if pod.Status.Phase == corev1.PodSucceeded {
+			log.Infof("Job %s completed with %s", pod.GetName(), corev1.PodSucceeded)
+		}
 	case <-ctx.Done():
-		log.Warnf("Request cancelled while waiting for %s", jobNameFixPeers)
+		log.Warnf("Context was cancelled while waiting for %s", jobNameDataBackup)
 	}
 
 	log.Infof("Deleting %s now", jobNameFixPeers)
@@ -487,31 +495,11 @@ func backupEtcdData(ctx context.Context, log *logrus.Entry, cluster, node string
 		pod := event.Object.(*corev1.Pod)
 
 		if pod.Status.Phase == corev1.PodSucceeded {
-			log.Infof("Job %s completed with %s", jobDataBackup.GetName(), corev1.PodSucceeded)
+			log.Infof("Job %s completed with %s", pod.GetName(), corev1.PodSucceeded)
 		}
 	case <-ctx.Done():
 		log.Warnf("Context was cancelled while waiting for %s", jobNameDataBackup)
 	}
-
-	// select {
-	// // case <-time.After(timeout):
-	// case <-time.After(time.Minute):
-	// 	log.Infof("Finished waiting for job %s", jobNameDataBackup)
-	// case <-ctx.Done():
-	// 	log.Warnf("Request cancelled while waiting for %s", jobNameDataBackup)
-	// }
-
-	// TODO print pod logs in output
-	// rawJobLogs, err := kubeActions.KubeGetPodLogs(ctx, namespaceEtcds, jobDataBackup.GetName(), jobDataBackup.GetName())
-	// if err != nil {
-	// 	return err
-	// }
-
-	// jobLogs := ""
-	// err = codec.NewDecoderBytes(rawJobLogs, &codec.JsonHandle{}).Decode(jobLogs)
-	// if err != nil {
-	// 	return err
-	// }
 
 	log.Infof("Deleting job %s now", jobNameDataBackup)
 	propPolicy := metav1.DeletePropagationBackground
@@ -599,16 +587,6 @@ func createBackupEtcdDataJob(cluster, node string) *unstructured.Unstructured {
 	return j
 }
 
-// // adjustTimeout is used to adjust the amount of time when waiting for jobs to complete when in a testing environment
-// func adjustTimeout(ctx context.Context, log *logrus.Entry) time.Duration {
-// 	if ctx.Value(ctxKey) == "TRUE" {
-// 		log.Info("Timeout adjusted for testing environment")
-// 		return time.Microsecond
-// 	}
-
-// 	return time.Minute
-// }
-
 // comparePodEnvToIp compares the etcd container's environment variables to the pod's actual IP address
 func comparePodEnvToIP(log *logrus.Entry, pods *corev1.PodList) (*degradedEtcd, error) {
 	degradedEtcds := []degradedEtcd{}
@@ -681,7 +659,6 @@ func ipFromEnv(containers []corev1.Container, podName string) string {
 	return ""
 }
 
-// TODO make this work for non status checks too
 func findCrashloopingPods(log *logrus.Entry, pods *corev1.PodList) (*corev1.Pod, error) {
 	// pods are collected in a list to check for multiple crashing etcd instances
 	// multiple etcd failures aren't supported so an error will be returned, rather than assuming the first found is the only one

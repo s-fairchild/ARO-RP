@@ -9,12 +9,16 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Azure/go-autorest/autorest/to"
 	operatorv1fake "github.com/openshift/client-go/operator/clientset/versioned/typed/operator/v1/fake"
 	"github.com/ugorji/go/codec"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	kruntime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/watch"
 	ktesting "k8s.io/client-go/testing"
 
 	"github.com/Azure/ARO-RP/pkg/api"
@@ -84,7 +88,11 @@ func TestFixEtcd(t *testing.T) {
 				k.EXPECT().KubeList(ctx, "Pod", namespaceEtcds).MaxTimes(1).Return(buf.Bytes(), nil)
 
 				// backupEtcd
-				k.EXPECT().KubeCreateOrUpdate(ctx, createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))).MaxTimes(1).Return(nil)
+				jobBackupEtcd := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
+				k.EXPECT().KubeCreateOrUpdate(ctx, jobBackupEtcd).MaxTimes(1).Return(nil)
+
+				createPodCompletedEvent(ctx, jobBackupEtcd, k, "app")
+
 				propPolicy := metav1.DeletePropagationBackground
 				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobNameDataBackup, true, &propPolicy).MaxTimes(1).Return(nil)
 
@@ -109,7 +117,9 @@ func TestFixEtcd(t *testing.T) {
 					t.Fatal(err)
 				}
 
-				k.EXPECT().KubeCreateOrUpdate(ctx, newJobFixPeers(doc.OpenShiftCluster.Name, peerPods, de.Node)).MaxTimes(1).Return(nil)
+				jobFixPeers := newJobFixPeers(doc.OpenShiftCluster.Name, peerPods, de.Node)
+				k.EXPECT().KubeCreateOrUpdate(ctx, jobFixPeers).MaxTimes(1).Return(nil)
+				createPodCompletedEvent(ctx, jobFixPeers, k, "app")
 				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobNameFixPeers, true, &propPolicy).MaxTimes(1).Return(nil)
 
 				// cleanup
@@ -142,7 +152,9 @@ func TestFixEtcd(t *testing.T) {
 				k.EXPECT().KubeList(ctx, "Pod", namespaceEtcds).MaxTimes(1).Return(buf.Bytes(), nil)
 
 				// backupEtcd
-				k.EXPECT().KubeCreateOrUpdate(ctx, createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))).MaxTimes(1).Return(nil)
+				jobBackupEtcd := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
+				k.EXPECT().KubeCreateOrUpdate(ctx, jobBackupEtcd).MaxTimes(1).Return(nil)
+				createPodCompletedEvent(ctx, jobBackupEtcd, k, "app")
 				propPolicy := metav1.DeletePropagationBackground
 				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobNameDataBackup, true, &propPolicy).MaxTimes(1).Return(nil)
 
@@ -167,7 +179,9 @@ func TestFixEtcd(t *testing.T) {
 					t.Fatal(err)
 				}
 
-				k.EXPECT().KubeCreateOrUpdate(ctx, newJobFixPeers(doc.OpenShiftCluster.Name, peerPods, de.Node)).MaxTimes(1).Return(nil)
+				jobFixPeers := newJobFixPeers(doc.OpenShiftCluster.Name, peerPods, de.Node)
+				k.EXPECT().KubeCreateOrUpdate(ctx, jobFixPeers).MaxTimes(1).Return(nil)
+				createPodCompletedEvent(ctx, jobFixPeers, k, "app")
 				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobNameFixPeers, true, &propPolicy).MaxTimes(1).Return(nil)
 
 				// cleanup
@@ -227,7 +241,9 @@ func TestFixEtcd(t *testing.T) {
 				k.EXPECT().KubeList(ctx, "Pod", namespaceEtcds).MaxTimes(1).Return(buf.Bytes(), nil)
 
 				// backupEtcd
-				k.EXPECT().KubeCreateOrUpdate(ctx, createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))).MaxTimes(1).Return(errors.New(tt.wantErr))
+				jobBackupEtcd := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
+				k.EXPECT().KubeCreateOrUpdate(ctx, jobBackupEtcd).MaxTimes(1).Return(errors.New(tt.wantErr))
+				createPodCompletedEvent(ctx, jobBackupEtcd, k, "app")
 			},
 		},
 		{
@@ -243,7 +259,9 @@ func TestFixEtcd(t *testing.T) {
 				k.EXPECT().KubeList(ctx, "Pod", namespaceEtcds).MaxTimes(1).Return(buf.Bytes(), nil)
 
 				// backupEtcd
-				k.EXPECT().KubeCreateOrUpdate(ctx, createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))).MaxTimes(1).Return(nil)
+				jobBackupEtcd := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
+				k.EXPECT().KubeCreateOrUpdate(ctx, jobBackupEtcd).MaxTimes(1).Return(nil)
+				createPodCompletedEvent(ctx, jobBackupEtcd, k, "app")
 				propPolicy := metav1.DeletePropagationBackground
 				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobNameDataBackup, true, &propPolicy).MaxTimes(1).Return(nil)
 
@@ -268,7 +286,9 @@ func TestFixEtcd(t *testing.T) {
 					t.Fatal(err)
 				}
 
-				k.EXPECT().KubeCreateOrUpdate(ctx, newJobFixPeers(doc.OpenShiftCluster.Name, peerPods, de.Node)).MaxTimes(1).Return(errors.New("oh no, can't create job fix peers"))
+				jobFixPeers := newJobFixPeers(doc.OpenShiftCluster.Name, peerPods, de.Node)
+				k.EXPECT().KubeCreateOrUpdate(ctx, jobFixPeers).MaxTimes(1).Return(errors.New("oh no, can't create job fix peers"))
+				createPodCompletedEvent(ctx, jobFixPeers, k, "app")
 
 				// cleanup
 				k.EXPECT().KubeDelete(ctx, serviceAcc.GetKind(), serviceAcc.GetNamespace(), serviceAcc.GetName(), true, nil).MaxTimes(1).Return(nil)
@@ -290,7 +310,9 @@ func TestFixEtcd(t *testing.T) {
 				k.EXPECT().KubeList(ctx, "Pod", namespaceEtcds).MaxTimes(1).Return(buf.Bytes(), nil)
 
 				// backupEtcd
-				k.EXPECT().KubeCreateOrUpdate(ctx, createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))).MaxTimes(1).Return(nil)
+				jobBackupEtcd := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
+				k.EXPECT().KubeCreateOrUpdate(ctx, jobBackupEtcd).MaxTimes(1).Return(nil)
+				createPodCompletedEvent(ctx, jobBackupEtcd, k, "app")
 
 				// fixPeers
 				serviceAcc := newServiceAccount(serviceAccountName, doc.OpenShiftCluster.Name)
@@ -320,7 +342,9 @@ func TestFixEtcd(t *testing.T) {
 				k.EXPECT().KubeList(ctx, "Pod", namespaceEtcds).MaxTimes(1).Return(buf.Bytes(), nil)
 
 				// backupEtcd
-				k.EXPECT().KubeCreateOrUpdate(ctx, createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))).MaxTimes(1).Return(nil)
+				jobBackupEtcd := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
+				k.EXPECT().KubeCreateOrUpdate(ctx, jobBackupEtcd).MaxTimes(1).Return(nil)
+				createPodCompletedEvent(ctx, jobBackupEtcd, k, "app")
 				propPolicy := metav1.DeletePropagationBackground
 				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobNameDataBackup, true, &propPolicy).MaxTimes(1).Return(nil)
 
@@ -351,7 +375,9 @@ func TestFixEtcd(t *testing.T) {
 				k.EXPECT().KubeList(ctx, "Pod", namespaceEtcds).MaxTimes(1).Return(buf.Bytes(), nil)
 
 				// backupEtcd
-				k.EXPECT().KubeCreateOrUpdate(ctx, createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))).MaxTimes(1).Return(nil)
+				jobBackupEtcd := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
+				k.EXPECT().KubeCreateOrUpdate(ctx, jobBackupEtcd).MaxTimes(1).Return(nil)
+				createPodCompletedEvent(ctx, jobBackupEtcd, k, "app")
 				propPolicy := metav1.DeletePropagationBackground
 				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobNameDataBackup, true, &propPolicy).MaxTimes(1).Return(nil)
 
@@ -385,7 +411,9 @@ func TestFixEtcd(t *testing.T) {
 				k.EXPECT().KubeList(ctx, "Pod", namespaceEtcds).MaxTimes(1).Return(buf.Bytes(), nil)
 
 				// backupEtcd
-				k.EXPECT().KubeCreateOrUpdate(ctx, createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))).MaxTimes(1).Return(nil)
+				jobBackupEtcd := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
+				k.EXPECT().KubeCreateOrUpdate(ctx, jobBackupEtcd).MaxTimes(1).Return(nil)
+				createPodCompletedEvent(ctx, jobBackupEtcd, k, "app")
 				propPolicy := metav1.DeletePropagationBackground
 				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobNameDataBackup, true, &propPolicy).MaxTimes(1).Return(nil)
 
@@ -458,6 +486,33 @@ func TestFixEtcd(t *testing.T) {
 				t.Errorf("\n%s\n !=\n%s", err.Error(), tt.wantErr)
 			}
 		})
+	}
+}
+
+func createPodCompletedEvent(ctx context.Context, o *unstructured.Unstructured, k *mock_adminactions.MockKubeActions, labelKey string) {
+	k.EXPECT().KubeWatch(ctx, o, labelKey).AnyTimes().DoAndReturn(func (ctx context.Context, o *unstructured.Unstructured, labelKey string) (watch.Interface, error) {
+		w := watch.NewFake()
+		go func ()  {
+			time.Sleep(time.Microsecond)
+			w.Action(watch.Added, newCompletedPodWatchEvent(o))
+		}()
+		return w, nil
+	})
+}
+
+func newCompletedPodWatchEvent(o *unstructured.Unstructured) kruntime.Object {
+	return &corev1.Pod{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Pod",
+			APIVersion: "v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      o.GetName(),
+			Namespace: o.GetNamespace(),
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodSucceeded,
+		},
 	}
 }
 
