@@ -26,6 +26,7 @@ import (
 	kruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
+	batchv1 "k8s.io/api/batch/v1"
 
 	"github.com/Azure/ARO-RP/pkg/api"
 	"github.com/Azure/ARO-RP/pkg/env"
@@ -288,10 +289,7 @@ func fixPeers(ctx context.Context, log *logrus.Entry, de *degradedEtcd, pods *co
 		return []byte{}, err
 	}
 
-	waitForJobSucceed(ctx, log, watcher, jobFixPeers)
-
-	// Container name is the same as job name
-	containerLogs, err := kubeActions.KubeGetPodLogs(ctx, jobFixPeers.GetNamespace(), jobFixPeers.GetName(), jobFixPeers.GetName())
+	containerLogs, err := waitForJobSucceed(ctx, log, watcher, jobFixPeers, kubeActions)
 	if err != nil {
 		return containerLogs, err
 	}
@@ -487,10 +485,7 @@ func backupEtcdData(ctx context.Context, log *logrus.Entry, cluster, node string
 		return []byte{}, err
 	}
 
-	waitForJobSucceed(ctx, log, watcher, jobDataBackup)
-
-	// Container name is the same as job name
-	containerLogs, err := kubeActions.KubeGetPodLogs(ctx, jobDataBackup.GetNamespace(), jobDataBackup.GetName(), jobDataBackup.GetName())
+	containerLogs, err := waitForJobSucceed(ctx, log, watcher, jobDataBackup, kubeActions)
 	if err != nil {
 		return containerLogs, err
 	}
@@ -500,9 +495,12 @@ func backupEtcdData(ctx context.Context, log *logrus.Entry, cluster, node string
 	return containerLogs, kubeActions.KubeDelete(ctx, "Job", namespaceEtcds, jobDataBackup.GetName(), true, &propPolicy)
 }
 
-func waitForJobSucceed(ctx context.Context, log *logrus.Entry, watcher watch.Interface, o *unstructured.Unstructured) {
-	ctx, cancelCtx := context.WithTimeout(ctx, time.Minute)
-	defer cancelCtx()
+// TODO fix unit tests
+// Write intigration test
+func waitForJobSucceed(ctx context.Context, log *logrus.Entry, watcher watch.Interface, o *unstructured.Unstructured, k adminactions.KubeActions) ([]byte, error) {
+	// TODO get unit tests working with timeout value
+	// ctx, cancelCtx := context.WithTimeout(ctx, time.Minute)
+	// defer cancelCtx()
 
 	select {
 	case event := <-watcher.ResultChan():
@@ -510,11 +508,35 @@ func waitForJobSucceed(ctx context.Context, log *logrus.Entry, watcher watch.Int
 		pod := event.Object.(*corev1.Pod)
 
 		if pod.Status.Phase == corev1.PodSucceeded {
-			log.Infof("Job %s completed with %s", pod.GetName(), corev1.PodSucceeded)
+			log.Infof("Job %s completed with %s", pod.GetName(), pod.Status.Message)
+		} else if pod.Status.Phase == corev1.PodFailed {
+			log.Infof("Job %s failed with %s", pod.GetName(), pod.Status.Message)
 		}
 	case <-ctx.Done():
+		// TODO verify this works and return job description/events rather than logs
 		log.Warnf("Context was cancelled while waiting for %s", o.GetName())
+		newCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		rawJob, err := k.KubeGet(newCtx, o.GetKind(), o.GetNamespace(), o.GetName())
+		if err != nil {
+			return []byte{}, fmt.Errorf("failed to get %s in namespace %s of name %s while collecting failure details, %s", o.GetKind(), o.GetNamespace(), o.GetName(), err.Error())
+		}
+		job := &batchv1.Job{}
+		err = codec.NewDecoderBytes(rawJob, &codec.JsonHandle{}).Decode(job)
+		if err != nil {
+			return []byte{}, fmt.Errorf("failed to decode job while collecting failure details, %s", err.Error())
+		}
+		log.Debugf("Returning job %s status as json now", o.GetName())
+		return job.Status.Marshal()
 	}
+
+	// Container name is the same as job name
+	cxLogs, err := k.KubeGetPodLogs(ctx, o.GetNamespace(), o.GetName(), o.GetName())
+	if err != nil {
+		return cxLogs, err
+	}
+
+	return cxLogs, nil
 }
 
 func createBackupEtcdDataJob(cluster, node string) *unstructured.Unstructured {
