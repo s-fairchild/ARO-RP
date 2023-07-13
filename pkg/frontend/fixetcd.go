@@ -33,6 +33,10 @@ import (
 	"github.com/Azure/ARO-RP/pkg/frontend/adminactions"
 )
 
+type FixEtcd interface {
+	Fix(ctx context.Context, log *logrus.Entry, env env.Interface, doc *api.OpenShiftClusterDocument, kubeActions adminactions.KubeActions, etcdcli operatorv1client.EtcdInterface) ([]byte, error)
+}
+
 const (
 	serviceAccountName    = "etcd-recovery-privileged"
 	kubeServiceAccount    = "system:serviceaccount" + namespaceEtcds + ":" + serviceAccountName

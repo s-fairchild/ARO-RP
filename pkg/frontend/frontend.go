@@ -99,6 +99,7 @@ type frontend struct {
 	systemDataSecretEnricher               func(*api.ClusterManagerConfigurationDocument, *api.SystemData)
 
 	streamResponder StreamResponder
+	etcdFixer FixEtcd
 }
 
 // Runnable represents a runnable object

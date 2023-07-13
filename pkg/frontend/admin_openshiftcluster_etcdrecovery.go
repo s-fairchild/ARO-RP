@@ -65,5 +65,5 @@ func (f *frontend) _postAdminOpenShiftClusterEtcdRecovery(ctx context.Context, r
 		return []byte{}, err
 	}
 
-	return f.fixEtcd(ctx, log, f.env, doc, kubeActions, operatorcli.OperatorV1().Etcds())
+	return f.etcdFixer.Fix(ctx, log, f.env, doc, kubeActions, operatorcli.OperatorV1().Etcds())
 }
