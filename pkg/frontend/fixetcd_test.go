@@ -252,24 +252,6 @@ func TestFixEtcd(t *testing.T) {
 			},
 		},
 		{
-			name:    "fail: Backup job Pod failed",
-			wantErr: "oh no, Pod is in a failed state",
-			pods:    newDegradedPods(doc, false, false),
-			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList) {
-				buf := &bytes.Buffer{}
-				err := codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(pods)
-				if err != nil {
-					t.Fatalf("%s failed to encode pods, %s", t.Name(), err.Error())
-				}
-				k.EXPECT().KubeList(ctx, "Pod", namespaceEtcds).MaxTimes(1).Return(buf.Bytes(), nil)
-
-				// backupEtcd
-				jobBackupEtcd := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
-				k.EXPECT().KubeCreateOrUpdate(ctx, jobBackupEtcd).MaxTimes(1).Return(errors.New(tt.wantErr))
-				createPodEvent(ctx, jobBackupEtcd, k, "app", corev1.PodFailed)
-			},
-		},
-		{
 			name:    "fail: create job fix peers",
 			wantErr: "oh no, can't create job fix peers",
 			pods:    newDegradedPods(doc, false, false),
@@ -465,6 +447,27 @@ func TestFixEtcd(t *testing.T) {
 				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobBackupEtcd.GetName(), true, &propPolicy).MaxTimes(1).Return(nil)
 			},
 		},
+		{
+			name:    "fail: Backup job Pod failed",
+			wantErr: "pod etcd-recovery-data-backup event Failed received with message Pod Failed for reasons XYZ...",
+			pods:    newDegradedPods(doc, false, false),
+			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList) {
+				buf := &bytes.Buffer{}
+				err := codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(pods)
+				if err != nil {
+					t.Fatalf("%s failed to encode pods, %s", t.Name(), err.Error())
+				}
+				k.EXPECT().KubeList(ctx, "Pod", namespaceEtcds).MaxTimes(1).Return(buf.Bytes(), nil)
+
+				// backupEtcd
+				jobBackupEtcd := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
+				k.EXPECT().KubeCreateOrUpdate(ctx, jobBackupEtcd).MaxTimes(1).Return(nil).MaxTimes(1)
+				createPodEvent(ctx, jobBackupEtcd, k, "app", corev1.PodFailed)
+				k.EXPECT().KubeGetPodLogs(ctx, jobBackupEtcd.GetNamespace(), jobBackupEtcd.GetName(), jobBackupEtcd.GetName()).MaxTimes(1).Return([]byte("oh no, Pod is in a failed state"), nil)
+				propPolicy := metav1.DeletePropagationBackground
+				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobBackupEtcd.GetName(), true, &propPolicy).MaxTimes(1).Return(nil)
+			},
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ti := newTestInfra(t).WithOpenShiftClusters().WithSubscriptions()
@@ -519,6 +522,12 @@ func TestFixEtcd(t *testing.T) {
 }
 
 func createPodEvent(ctx context.Context, o *unstructured.Unstructured, k *mock_adminactions.MockKubeActions, labelKey string, podPhase corev1.PodPhase) {
+	message := ""
+	if podPhase == corev1.PodSucceeded {
+		message = "Pod succeeded Successfully"
+	} else if podPhase == corev1.PodFailed {
+		message = "Pod Failed for reasons XYZ..."
+	}
 	k.EXPECT().KubeWatch(ctx, o, labelKey).AnyTimes().DoAndReturn(func(ctx context.Context, o *unstructured.Unstructured, labelKey string) (watch.Interface, error) {
 		w := watch.NewFake()
 		go func() {
@@ -534,10 +543,11 @@ func createPodEvent(ctx context.Context, o *unstructured.Unstructured, k *mock_a
 					Namespace: o.GetNamespace(),
 				},
 				Status: corev1.PodStatus{
-					Phase: podPhase,
+					Phase:   podPhase,
+					Message: message,
 				},
-					})
-				}()
+			})
+		}()
 		return w, nil
 	})
 }
@@ -602,7 +612,7 @@ func newDegradedPods(doc *api.OpenShiftClusterDocument, multiDegraded, emptyEnv 
 
 	statuses := []corev1.ContainerStatus{
 		{
-			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+			State:       corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
 			ContainerID: containerID,
 		},
 	}

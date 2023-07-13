@@ -19,6 +19,7 @@ import (
 	operatorv1client "github.com/openshift/client-go/operator/clientset/versioned/typed/operator/v1"
 	"github.com/sirupsen/logrus"
 	"github.com/ugorji/go/codec"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,7 +27,6 @@ import (
 	kruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
-	batchv1 "k8s.io/api/batch/v1"
 
 	"github.com/Azure/ARO-RP/pkg/api"
 	"github.com/Azure/ARO-RP/pkg/env"
@@ -495,25 +495,26 @@ func backupEtcdData(ctx context.Context, log *logrus.Entry, cluster, node string
 	return containerLogs, kubeActions.KubeDelete(ctx, "Job", namespaceEtcds, jobDataBackup.GetName(), true, &propPolicy)
 }
 
-// TODO fix unit tests
-// Write intigration test
 func waitForJobSucceed(ctx context.Context, log *logrus.Entry, watcher watch.Interface, o *unstructured.Unstructured, k adminactions.KubeActions) ([]byte, error) {
 	// TODO get unit tests working with timeout value
 	// ctx, cancelCtx := context.WithTimeout(ctx, time.Minute)
 	// defer cancelCtx()
 
+	var waitErr error
+	log.Infof("Waiting for %s to reach %s phase", o.GetName(), corev1.PodSucceeded)
 	select {
 	case event := <-watcher.ResultChan():
-		log.Infof("Waiting for %s to reach %s phase", o.GetName(), corev1.PodSucceeded)
 		pod := event.Object.(*corev1.Pod)
 
 		if pod.Status.Phase == corev1.PodSucceeded {
 			log.Infof("Job %s completed with %s", pod.GetName(), pod.Status.Message)
 		} else if pod.Status.Phase == corev1.PodFailed {
-			log.Infof("Job %s failed with %s", pod.GetName(), pod.Status.Message)
+			log.Infof("Job %s reached phase %s with message: %s", pod.GetName(), pod.Status.Phase, pod.Status.Message)
+			waitErr = fmt.Errorf("pod %s event %s received with message %s", pod.Name, pod.Status.Phase, pod.Status.Message)
+		} else {
+			log.Infof("Job %s reached phase %s with message: %s", pod.GetName(), pod.Status.Phase, pod.Status.Message)
 		}
 	case <-ctx.Done():
-		// TODO verify this works and return job description/events rather than logs
 		log.Warnf("Context was cancelled while waiting for %s", o.GetName())
 		newCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
@@ -536,7 +537,7 @@ func waitForJobSucceed(ctx context.Context, log *logrus.Entry, watcher watch.Int
 		return cxLogs, err
 	}
 
-	return cxLogs, nil
+	return cxLogs, waitErr
 }
 
 func createBackupEtcdDataJob(cluster, node string) *unstructured.Unstructured {
