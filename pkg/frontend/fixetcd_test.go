@@ -29,11 +29,11 @@ import (
 const degradedNode = "master-2"
 
 func TestFixEtcd(t *testing.T) {
-	ctx := context.Background()
+	// Context leak is intentional to make use of cancel function
+	ctx, ctxCancel := context.WithCancel(context.Background())
 	const (
 		mockSubID    = "00000000-0000-0000-0000-000000000000"
-		mockTenantID = "00000000-0000-0000-0000-000000000000"
-		urlParams    = "?api-version=admin&namespace=openshift-etcd&name=cluster&kind=Etcd"
+		mockTenantID = mockSubID
 	)
 	resourceID := testdatabase.GetResourcePath(mockSubID, "cluster")
 	doc := &api.OpenShiftClusterDocument{
@@ -50,23 +50,25 @@ func TestFixEtcd(t *testing.T) {
 
 	type test struct {
 		name    string
-		mocks   func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList)
+		mocks   func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList, ctxCancel context.CancelFunc)
 		wantErr string
 		pods    *corev1.PodList
+		ctxCancel context.CancelFunc
+		cancel bool
 	}
 
 	for _, tt := range []*test{
 		{
 			name:    "fail: list pods",
 			wantErr: "oh no, can't list pods",
-			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList) {
+			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList, ctxCancel context.CancelFunc) {
 				k.EXPECT().KubeList(ctx, "Pod", namespaceEtcds).MaxTimes(1).Return(nil, errors.New("oh no, can't list pods"))
 			},
 		},
 		{
 			name:    "fail: invalid json, can't decode pods",
 			wantErr: "json decode error [pos 1]: only encoded map or array can decode into struct",
-			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList) {
+			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList, ctxCancel context.CancelFunc) {
 				buf := &bytes.Buffer{}
 				err := codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(`{`)
 				if err != nil {
@@ -78,7 +80,7 @@ func TestFixEtcd(t *testing.T) {
 		{
 			name: "pass: Expected degraded etcd scenario",
 			pods: newDegradedPods(doc, false, false),
-			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList) {
+			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList, ctxCancel context.CancelFunc) {
 				buf := &bytes.Buffer{}
 				err := codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(pods)
 				if err != nil {
@@ -90,7 +92,7 @@ func TestFixEtcd(t *testing.T) {
 				jobBackupEtcd := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
 				k.EXPECT().KubeCreateOrUpdate(ctx, jobBackupEtcd).MaxTimes(1).Return(nil)
 
-				createPodEvent(ctx, jobBackupEtcd, k, "app", corev1.PodSucceeded)
+				createPodEvent(ctx, jobBackupEtcd, k, "app", corev1.PodSucceeded, false)
 
 				k.EXPECT().KubeGetPodLogs(ctx, jobBackupEtcd.GetNamespace(), jobBackupEtcd.GetName(), jobBackupEtcd.GetName()).MaxTimes(1).Return([]byte("Backup job doing backup things..."), nil)
 
@@ -120,7 +122,7 @@ func TestFixEtcd(t *testing.T) {
 
 				jobFixPeers := newJobFixPeers(doc.OpenShiftCluster.Name, peerPods, de.Node)
 				k.EXPECT().KubeCreateOrUpdate(ctx, jobFixPeers).MaxTimes(1).Return(nil)
-				createPodEvent(ctx, jobFixPeers, k, "app", corev1.PodSucceeded)
+				createPodEvent(ctx, jobFixPeers, k, "app", corev1.PodSucceeded, false)
 
 				k.EXPECT().KubeGetPodLogs(ctx, jobFixPeers.GetNamespace(), jobFixPeers.GetName(), jobFixPeers.GetName()).MaxTimes(1).Return([]byte("Fix peer job fixing peers..."), nil)
 				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobFixPeers.GetName(), true, &propPolicy).MaxTimes(1).Return(nil)
@@ -146,7 +148,7 @@ func TestFixEtcd(t *testing.T) {
 		{
 			name: "pass: Empty env vars scenario",
 			pods: newDegradedPods(doc, false, true),
-			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList) {
+			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList, ctxCancel context.CancelFunc) {
 				buf := &bytes.Buffer{}
 				err := codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(pods)
 				if err != nil {
@@ -157,7 +159,7 @@ func TestFixEtcd(t *testing.T) {
 				// backupEtcd
 				jobBackupEtcd := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
 				k.EXPECT().KubeCreateOrUpdate(ctx, jobBackupEtcd).MaxTimes(1).Return(nil)
-				createPodEvent(ctx, jobBackupEtcd, k, "app", corev1.PodSucceeded)
+				createPodEvent(ctx, jobBackupEtcd, k, "app", corev1.PodSucceeded, false)
 				k.EXPECT().KubeGetPodLogs(ctx, jobBackupEtcd.GetNamespace(), jobBackupEtcd.GetName(), jobBackupEtcd.GetName()).MaxTimes(1).Return([]byte("Backup job doing backup things..."), nil)
 				propPolicy := metav1.DeletePropagationBackground
 				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobBackupEtcd.GetName(), true, &propPolicy).MaxTimes(1).Return(nil)
@@ -185,7 +187,7 @@ func TestFixEtcd(t *testing.T) {
 
 				jobFixPeers := newJobFixPeers(doc.OpenShiftCluster.Name, peerPods, de.Node)
 				k.EXPECT().KubeCreateOrUpdate(ctx, jobFixPeers).MaxTimes(1).Return(nil)
-				createPodEvent(ctx, jobFixPeers, k, "app", corev1.PodSucceeded)
+				createPodEvent(ctx, jobFixPeers, k, "app", corev1.PodSucceeded, false)
 				k.EXPECT().KubeGetPodLogs(ctx, jobFixPeers.GetNamespace(), jobFixPeers.GetName(), jobFixPeers.GetName()).MaxTimes(1).Return([]byte("Fix peer job fixing peers..."), nil)
 				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobFixPeers.GetName(), true, &propPolicy).MaxTimes(1).Return(nil)
 
@@ -211,7 +213,7 @@ func TestFixEtcd(t *testing.T) {
 			name:    "fail: Multiple degraded etcd instances scenario",
 			wantErr: "only a single degraded etcd pod can can be recovered from, more than one NotReady etcd pods were found: [etcd-cluster-zfsbk-master-0 etcd-cluster-zfsbk-master-1 etcd-cluster-zfsbk-master-2]",
 			pods:    newDegradedPods(doc, true, true),
-			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList) {
+			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList, ctxCancel context.CancelFunc) {
 				buf := &bytes.Buffer{}
 				err := codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(pods)
 				if err != nil {
@@ -224,7 +226,7 @@ func TestFixEtcd(t *testing.T) {
 			name:    "fail: empty/correct pod env and no bad container statuses",
 			wantErr: "no etcd pod's were found in a CrashLoopBackOff state, unable to remediate etcd deployment",
 			pods:    &corev1.PodList{},
-			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList) {
+			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList, ctxCancel context.CancelFunc) {
 				buf := &bytes.Buffer{}
 				err := codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(pods)
 				if err != nil {
@@ -237,7 +239,7 @@ func TestFixEtcd(t *testing.T) {
 			name:    "fail: create job data backup",
 			wantErr: "oh no, can't create job data backup",
 			pods:    newDegradedPods(doc, false, false),
-			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList) {
+			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList, ctxCancel context.CancelFunc) {
 				buf := &bytes.Buffer{}
 				err := codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(pods)
 				if err != nil {
@@ -248,14 +250,14 @@ func TestFixEtcd(t *testing.T) {
 				// backupEtcd
 				jobBackupEtcd := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
 				k.EXPECT().KubeCreateOrUpdate(ctx, jobBackupEtcd).MaxTimes(1).Return(errors.New(tt.wantErr))
-				createPodEvent(ctx, jobBackupEtcd, k, "app", corev1.PodSucceeded)
+				createPodEvent(ctx, jobBackupEtcd, k, "app", corev1.PodSucceeded, false)
 			},
 		},
 		{
 			name:    "fail: create job fix peers",
 			wantErr: "oh no, can't create job fix peers",
 			pods:    newDegradedPods(doc, false, false),
-			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList) {
+			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList, ctxCancel context.CancelFunc) {
 				buf := &bytes.Buffer{}
 				err := codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(pods)
 				if err != nil {
@@ -266,7 +268,7 @@ func TestFixEtcd(t *testing.T) {
 				// backupEtcd
 				jobBackupEtcd := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
 				k.EXPECT().KubeCreateOrUpdate(ctx, jobBackupEtcd).MaxTimes(1).Return(nil)
-				createPodEvent(ctx, jobBackupEtcd, k, "app", corev1.PodSucceeded)
+				createPodEvent(ctx, jobBackupEtcd, k, "app", corev1.PodSucceeded, false)
 				k.EXPECT().KubeGetPodLogs(ctx, jobBackupEtcd.GetNamespace(), jobBackupEtcd.GetName(), jobBackupEtcd.GetName()).MaxTimes(1).Return([]byte("Backup job doing backup things..."), nil)
 				propPolicy := metav1.DeletePropagationBackground
 				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobBackupEtcd.GetName(), true, &propPolicy).MaxTimes(1).Return(nil)
@@ -294,7 +296,7 @@ func TestFixEtcd(t *testing.T) {
 
 				jobFixPeers := newJobFixPeers(doc.OpenShiftCluster.Name, peerPods, de.Node)
 				k.EXPECT().KubeCreateOrUpdate(ctx, jobFixPeers).MaxTimes(1).Return(errors.New("oh no, can't create job fix peers"))
-				createPodEvent(ctx, jobFixPeers, k, "app", corev1.PodSucceeded)
+				createPodEvent(ctx, jobFixPeers, k, "app", corev1.PodSucceeded, false)
 
 				// cleanup
 				k.EXPECT().KubeDelete(ctx, serviceAcc.GetKind(), serviceAcc.GetNamespace(), serviceAcc.GetName(), true, nil).MaxTimes(1).Return(nil)
@@ -307,7 +309,7 @@ func TestFixEtcd(t *testing.T) {
 			name:    "fail: create service account",
 			wantErr: "oh no, can't create service account %!s(<nil>)",
 			pods:    newDegradedPods(doc, false, false),
-			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList) {
+			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList, ctxCancel context.CancelFunc) {
 				buf := &bytes.Buffer{}
 				err := codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(pods)
 				if err != nil {
@@ -318,7 +320,7 @@ func TestFixEtcd(t *testing.T) {
 				// backupEtcd
 				jobBackupEtcd := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
 				k.EXPECT().KubeCreateOrUpdate(ctx, jobBackupEtcd).MaxTimes(1).Return(nil)
-				createPodEvent(ctx, jobBackupEtcd, k, "app", corev1.PodSucceeded)
+				createPodEvent(ctx, jobBackupEtcd, k, "app", corev1.PodSucceeded, false)
 				k.EXPECT().KubeGetPodLogs(ctx, jobBackupEtcd.GetNamespace(), jobBackupEtcd.GetName(), jobBackupEtcd.GetName()).MaxTimes(1).Return([]byte("Backup job doing backup things..."), nil)
 
 				// fixPeers
@@ -340,7 +342,7 @@ func TestFixEtcd(t *testing.T) {
 			name:    "fail: create cluster role",
 			wantErr: "oh no, can't create job fix peers %!s(<nil>)",
 			pods:    newDegradedPods(doc, false, false),
-			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList) {
+			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList, ctxCancel context.CancelFunc) {
 				buf := &bytes.Buffer{}
 				err := codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(pods)
 				if err != nil {
@@ -351,7 +353,7 @@ func TestFixEtcd(t *testing.T) {
 				// backupEtcd
 				jobBackupEtcd := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
 				k.EXPECT().KubeCreateOrUpdate(ctx, jobBackupEtcd).MaxTimes(1).Return(nil)
-				createPodEvent(ctx, jobBackupEtcd, k, "app", corev1.PodSucceeded)
+				createPodEvent(ctx, jobBackupEtcd, k, "app", corev1.PodSucceeded, false)
 				k.EXPECT().KubeGetPodLogs(ctx, jobBackupEtcd.GetNamespace(), jobBackupEtcd.GetName(), jobBackupEtcd.GetName()).MaxTimes(1).Return([]byte("Backup job doing backup things..."), nil)
 				propPolicy := metav1.DeletePropagationBackground
 				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobBackupEtcd.GetName(), true, &propPolicy).MaxTimes(1).Return(nil)
@@ -374,7 +376,7 @@ func TestFixEtcd(t *testing.T) {
 			name:    "fail: create cluster role binding",
 			wantErr: "oh no, can't create cluster role binding %!s(<nil>)",
 			pods:    newDegradedPods(doc, false, false),
-			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList) {
+			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList, ctxCancel context.CancelFunc) {
 				buf := &bytes.Buffer{}
 				err := codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(pods)
 				if err != nil {
@@ -385,7 +387,7 @@ func TestFixEtcd(t *testing.T) {
 				// backupEtcd
 				jobBackupEtcd := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
 				k.EXPECT().KubeCreateOrUpdate(ctx, jobBackupEtcd).MaxTimes(1).Return(nil)
-				createPodEvent(ctx, jobBackupEtcd, k, "app", corev1.PodSucceeded)
+				createPodEvent(ctx, jobBackupEtcd, k, "app", corev1.PodSucceeded, false)
 				k.EXPECT().KubeGetPodLogs(ctx, jobBackupEtcd.GetNamespace(), jobBackupEtcd.GetName(), jobBackupEtcd.GetName()).MaxTimes(1).Return([]byte("Backup job doing backup things..."), nil)
 				propPolicy := metav1.DeletePropagationBackground
 				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobBackupEtcd.GetName(), true, &propPolicy).MaxTimes(1).Return(nil)
@@ -411,7 +413,7 @@ func TestFixEtcd(t *testing.T) {
 			name:    "fail: create security context constraint",
 			wantErr: "oh no, can't create security context constraint %!s(<nil>)",
 			pods:    newDegradedPods(doc, false, false),
-			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList) {
+			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList, ctxCancel context.CancelFunc) {
 				buf := &bytes.Buffer{}
 				err := codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(pods)
 				if err != nil {
@@ -422,7 +424,7 @@ func TestFixEtcd(t *testing.T) {
 				// backupEtcd
 				jobBackupEtcd := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
 				k.EXPECT().KubeCreateOrUpdate(ctx, jobBackupEtcd).MaxTimes(1).Return(nil)
-				createPodEvent(ctx, jobBackupEtcd, k, "app", corev1.PodSucceeded)
+				createPodEvent(ctx, jobBackupEtcd, k, "app", corev1.PodSucceeded, false)
 				k.EXPECT().KubeGetPodLogs(ctx, jobBackupEtcd.GetNamespace(), jobBackupEtcd.GetName(), jobBackupEtcd.GetName()).MaxTimes(1).Return([]byte("Backup job doing backup things..."), nil)
 				propPolicy := metav1.DeletePropagationBackground
 				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobBackupEtcd.GetName(), true, &propPolicy).MaxTimes(1).Return(nil)
@@ -451,7 +453,7 @@ func TestFixEtcd(t *testing.T) {
 			name:    "fail: Backup job Pod failed",
 			wantErr: "pod etcd-recovery-data-backup event Failed received with message Pod Failed for reasons XYZ...",
 			pods:    newDegradedPods(doc, false, false),
-			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList) {
+			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList, ctxCancel context.CancelFunc) {
 				buf := &bytes.Buffer{}
 				err := codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(pods)
 				if err != nil {
@@ -462,8 +464,34 @@ func TestFixEtcd(t *testing.T) {
 				// backupEtcd
 				jobBackupEtcd := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
 				k.EXPECT().KubeCreateOrUpdate(ctx, jobBackupEtcd).MaxTimes(1).Return(nil).MaxTimes(1)
-				createPodEvent(ctx, jobBackupEtcd, k, "app", corev1.PodFailed)
+				createPodEvent(ctx, jobBackupEtcd, k, "app", corev1.PodFailed, false)
 				k.EXPECT().KubeGetPodLogs(ctx, jobBackupEtcd.GetNamespace(), jobBackupEtcd.GetName(), jobBackupEtcd.GetName()).MaxTimes(1).Return([]byte("oh no, Pod is in a failed state"), nil)
+				propPolicy := metav1.DeletePropagationBackground
+				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobBackupEtcd.GetName(), true, &propPolicy).MaxTimes(1).Return(nil)
+			},
+		},
+		{
+			name:    "fail: Context cancelled",
+			wantErr: "context was cancelled while waiting for etcd-recovery-data-backup because context canceled",
+			pods:    newDegradedPods(doc, false, false),
+			cancel: true,
+			ctxCancel: ctxCancel,
+			mocks: func(tt *test, t *testing.T, ti *testInfra, k *mock_adminactions.MockKubeActions, pods *corev1.PodList, ctxCancel context.CancelFunc) {
+				buf := &bytes.Buffer{}
+				err := codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(pods)
+				if err != nil {
+					t.Fatalf("%s failed to encode pods, %s", t.Name(), err.Error())
+				}
+				k.EXPECT().KubeList(ctx, "Pod", namespaceEtcds).MaxTimes(1).Return(buf.Bytes(), nil)
+
+				// backupEtcd
+				jobBackupEtcd := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
+				k.EXPECT().KubeCreateOrUpdate(ctx, jobBackupEtcd).MaxTimes(1).Return(nil).MaxTimes(1)
+				createPodEvent(ctx, jobBackupEtcd, k, "app", corev1.PodPending, tt.cancel)
+				if tt.cancel {
+					tt.ctxCancel()
+				}
+				k.EXPECT().KubeGetPodLogs(ctx, jobBackupEtcd.GetNamespace(), jobBackupEtcd.GetName(), jobBackupEtcd.GetName()).MaxTimes(1).Return([]byte(tt.wantErr), nil)
 				propPolicy := metav1.DeletePropagationBackground
 				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobBackupEtcd.GetName(), true, &propPolicy).MaxTimes(1).Return(nil)
 			},
@@ -474,7 +502,7 @@ func TestFixEtcd(t *testing.T) {
 			defer ti.done()
 
 			k := mock_adminactions.NewMockKubeActions(ti.controller)
-			tt.mocks(tt, t, ti, k, tt.pods)
+			tt.mocks(tt, t, ti, k, tt.pods, ctxCancel)
 
 			ti.fixture.AddOpenShiftClusterDocuments(doc)
 			ti.fixture.AddSubscriptionDocuments(&api.SubscriptionDocument{
@@ -521,33 +549,41 @@ func TestFixEtcd(t *testing.T) {
 	}
 }
 
-func createPodEvent(ctx context.Context, o *unstructured.Unstructured, k *mock_adminactions.MockKubeActions, labelKey string, podPhase corev1.PodPhase) {
+func createPodEvent(ctx context.Context, o *unstructured.Unstructured, k *mock_adminactions.MockKubeActions, labelKey string, podPhase corev1.PodPhase, noUpdates bool) {
 	message := ""
-	if podPhase == corev1.PodSucceeded {
+	switch podPhase {
+	case corev1.PodSucceeded:
 		message = "Pod succeeded Successfully"
-	} else if podPhase == corev1.PodFailed {
+	case corev1.PodFailed:
 		message = "Pod Failed for reasons XYZ..."
+	case corev1.PodPending:
+		message = "Pod is pending..."
+	case corev1.PodUnknown:
+		message = "Pod status is unknown..."
 	}
 	k.EXPECT().KubeWatch(ctx, o, labelKey).AnyTimes().DoAndReturn(func(ctx context.Context, o *unstructured.Unstructured, labelKey string) (watch.Interface, error) {
 		w := watch.NewFake()
-		go func() {
-			// A slight delay is required to send the watch event after the return
-			time.Sleep(time.Microsecond)
-			w.Action(watch.Added, &corev1.Pod{
-				TypeMeta: metav1.TypeMeta{
-					Kind:       "Pod",
-					APIVersion: "v1",
-				},
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      o.GetName(),
-					Namespace: o.GetNamespace(),
-				},
-				Status: corev1.PodStatus{
-					Phase:   podPhase,
-					Message: message,
-				},
-			})
-		}()
+		// used to test for context cancellations to simulate waiting for events that never happen
+		if !noUpdates {
+			go func() {
+				// A slight delay is required to send the watch event after the return
+				time.Sleep(time.Microsecond)
+				w.Action(watch.Added, &corev1.Pod{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "Pod",
+						APIVersion: "v1",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      o.GetName(),
+						Namespace: o.GetNamespace(),
+					},
+					Status: corev1.PodStatus{
+						Phase:   podPhase,
+						Message: message,
+					},
+				})
+			}()
+		}
 		return w, nil
 	})
 }

@@ -19,7 +19,6 @@ import (
 	operatorv1client "github.com/openshift/client-go/operator/clientset/versioned/typed/operator/v1"
 	"github.com/sirupsen/logrus"
 	"github.com/ugorji/go/codec"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -500,10 +499,6 @@ func backupEtcdData(ctx context.Context, log *logrus.Entry, cluster, node string
 }
 
 func waitForJobSucceed(ctx context.Context, log *logrus.Entry, watcher watch.Interface, o *unstructured.Unstructured, k adminactions.KubeActions) ([]byte, error) {
-	// TODO get unit tests working with timeout value
-	// ctx, cancelCtx := context.WithTimeout(ctx, time.Minute)
-	// defer cancelCtx()
-
 	var waitErr error
 	log.Infof("Waiting for %s to reach %s phase", o.GetName(), corev1.PodSucceeded)
 	select {
@@ -515,27 +510,14 @@ func waitForJobSucceed(ctx context.Context, log *logrus.Entry, watcher watch.Int
 		} else if pod.Status.Phase == corev1.PodFailed {
 			log.Infof("Job %s reached phase %s with message: %s", pod.GetName(), pod.Status.Phase, pod.Status.Message)
 			waitErr = fmt.Errorf("pod %s event %s received with message %s", pod.Name, pod.Status.Phase, pod.Status.Message)
-		} else {
-			log.Infof("Job %s reached phase %s with message: %s", pod.GetName(), pod.Status.Phase, pod.Status.Message)
 		}
 	case <-ctx.Done():
-		log.Warnf("Context was cancelled while waiting for %s", o.GetName())
-		newCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		rawJob, err := k.KubeGet(newCtx, o.GetKind(), o.GetNamespace(), o.GetName())
-		if err != nil {
-			return []byte{}, fmt.Errorf("failed to get %s in namespace %s of name %s while collecting failure details, %s", o.GetKind(), o.GetNamespace(), o.GetName(), err.Error())
-		}
-		job := &batchv1.Job{}
-		err = codec.NewDecoderBytes(rawJob, &codec.JsonHandle{}).Decode(job)
-		if err != nil {
-			return []byte{}, fmt.Errorf("failed to decode job while collecting failure details, %s", err.Error())
-		}
-		log.Debugf("Returning job %s status as json now", o.GetName())
-		return job.Status.Marshal()
+		waitErr = fmt.Errorf("context was cancelled while waiting for %s because %s", o.GetName(), ctx.Err())
 	}
 
+	log.Infof("Collecting Pod logs for %s in namespace %s", o.GetName(), o.GetNamespace())
 	// Container name is the same as job name
+	// TODO get container name from map instead of relying on metadata job name
 	cxLogs, err := k.KubeGetPodLogs(ctx, o.GetNamespace(), o.GetName(), o.GetName())
 	if err != nil {
 		return cxLogs, err
