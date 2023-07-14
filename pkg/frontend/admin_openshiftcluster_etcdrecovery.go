@@ -61,7 +61,7 @@ func (f *frontend) _postAdminOpenShiftClusterEtcdRecovery(ctx context.Context, r
 
 	restConfig, err := restconfig.RestConfig(f.env, doc.OpenShiftCluster)
 	if err != nil {
-		return []byte{}, err
+		return []byte{}, api.NewCloudError(http.StatusInternalServerError, api.CloudErrorCodeInternalServerError, "", err.Error())
 	}
 
 	operatorcli, err := operatorclient.NewForConfig(restConfig)
