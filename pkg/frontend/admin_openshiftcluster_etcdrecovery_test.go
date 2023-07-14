@@ -5,6 +5,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -13,14 +14,16 @@ import (
 	operatorv1client "github.com/openshift/client-go/operator/clientset/versioned/typed/operator/v1"
 	operatorv1fake "github.com/openshift/client-go/operator/clientset/versioned/typed/operator/v1/fake"
 	"github.com/sirupsen/logrus"
+
+	corev1 "k8s.io/api/core/v1"
 	kschema "k8s.io/apimachinery/pkg/runtime/schema"
+	ktesting "k8s.io/client-go/testing"
 
 	"github.com/Azure/ARO-RP/pkg/api"
 	"github.com/Azure/ARO-RP/pkg/env"
 	"github.com/Azure/ARO-RP/pkg/frontend/adminactions"
 	"github.com/Azure/ARO-RP/pkg/metrics/noop"
 	mock_adminactions "github.com/Azure/ARO-RP/pkg/util/mocks/adminactions"
-	mock_frontend "github.com/Azure/ARO-RP/pkg/util/mocks/frontend"
 )
 
 func TestAdminEtcdRecovery(t *testing.T) {
@@ -29,64 +32,57 @@ func TestAdminEtcdRecovery(t *testing.T) {
 	method := http.MethodPost
 	resourceName := "cluster"
 	ctx := context.Background()
-	type test struct {
-		name                    string
-		mocks                   func(ctx context.Context, ti *testInfra, fix *mock_frontend.MockFixEtcd, k *mock_adminactions.MockKubeActions, log *logrus.Entry, env env.Interface, doc *api.OpenShiftClusterDocument, etcdcli operatorv1client.EtcdInterface)
-		wantStatusCode          int
-		wantResponse            []byte
-		wantResponseContentType string
-		wantError               string
-		headers                 http.Header
-	}
 
-	for _, tt := range []*test{
-		{
-			name:                    "fail: misspelled header content type",
-			wantStatusCode: http.StatusOK,
-			wantResponseContentType: "application/json",
-			// 			wantResponse: []byte(`{
-			//     "error": {
-			// 	    "code": "UnsupportedMediaType",
-			// 	    "message": "The content media type 'applicaion/json' is not supported. Only 'application/json' is supported."
-			//    }
-			// }`),
-			mocks: func(ctx context.Context, ti *testInfra, fix *mock_frontend.MockFixEtcd, k *mock_adminactions.MockKubeActions, log *logrus.Entry, env env.Interface, doc *api.OpenShiftClusterDocument, etcdcli operatorv1client.EtcdInterface) {
-				k.EXPECT().ResolveGVR("Etcd").AnyTimes().Return(&kschema.GroupVersionResource{
-					Group: "",
-					Version: "v1",
-					Resource: "Etcd",
-				}, nil)
-				// fix.EXPECT().Fix(ctx, ti.log, env, doc, k, etcdcli).MinTimes(1).Return([]byte("Pod 1 logs... \n Pod 2 logs..."), errors.New("Error happened"))
-			},
-			headers: http.Header{
-				"Content-Type": []string{"application/json"},
-			},
-		},
-	} {
-		t.Run(fmt.Sprintf("%s: %s", method, tt.name), func(t *testing.T) {
-			resourceID := fmt.Sprintf("/subscriptions/%s/resourcegroups/resourceGroup/providers/Microsoft.RedHatOpenShift/openShiftClusters/%s", mockSubID, resourceName)
-						kubeConfig := api.SecureBytes(`apiVersion: v1
+	resourceID := fmt.Sprintf("/subscriptions/%s/resourcegroups/resourceGroup/providers/Microsoft.RedHatOpenShift/openShiftClusters/%s", mockSubID, resourceName)
+	kubeConfig := api.SecureBytes(`apiVersion: v1
 kind: Config
 clusters:
 - cluster:
     server: https://server
 name: cluster
 `)
-			doc := &api.OpenShiftClusterDocument{
-				Key: strings.ToLower(resourceID),
-				OpenShiftCluster: &api.OpenShiftCluster{
-					ID:   resourceID,
-					Name: resourceName,
-					Type: "Microsoft.RedHatOpenShift/openshiftClusters",
-					Properties: api.OpenShiftClusterProperties{
-						NetworkProfile: api.NetworkProfile{
-							APIServerPrivateEndpointIP: "0.0.0.0",
-						},
-						AdminKubeconfig: kubeConfig,
-						KubeadminPassword: api.SecureString("p"),
-					},
+	doc := &api.OpenShiftClusterDocument{
+		Key: strings.ToLower(resourceID),
+		OpenShiftCluster: &api.OpenShiftCluster{
+			ID:   resourceID,
+			Name: resourceName,
+			Type: "Microsoft.RedHatOpenShift/openshiftClusters",
+			Properties: api.OpenShiftClusterProperties{
+				NetworkProfile: api.NetworkProfile{
+					APIServerPrivateEndpointIP: "0.0.0.0",
 				},
-			}
+				AdminKubeconfig: kubeConfig,
+				KubeadminPassword: api.SecureString("p"),
+				InfraID: "zfsbk",
+			},
+		},
+	}
+	type test struct {
+		name                    string
+		mocks                   func(ctx context.Context, ti *testInfra, k *mock_adminactions.MockKubeActions, log *logrus.Entry, env env.Interface, doc *api.OpenShiftClusterDocument, pods *corev1.PodList, etcdcli operatorv1client.EtcdInterface)
+		wantStatusCode          int
+		wantResponse            []byte
+		wantResponseContentType string
+		wantError               string
+		pods *corev1.PodList
+	}
+	for _, tt := range []*test{
+		{
+			name: "fail: parse group kind resource",
+			wantStatusCode: http.StatusInternalServerError,
+			wantResponseContentType: "application/json",
+			wantError:               "500: InternalServerError: : failed to parse resource",
+			pods: newDegradedPods(doc, false, false),
+			mocks: func(ctx context.Context, ti *testInfra, k *mock_adminactions.MockKubeActions, log *logrus.Entry, env env.Interface, doc *api.OpenShiftClusterDocument, pods *corev1.PodList, etcdcli operatorv1client.EtcdInterface) {
+				k.EXPECT().ResolveGVR("Etcd").AnyTimes().Return(&kschema.GroupVersionResource{
+					Group: "",
+					Version: "v1",
+					Resource: "Etcd",
+				}, errors.New("failed to parse resource"))
+			},
+		},
+	} {
+		t.Run(fmt.Sprintf("%s: %s", method, tt.name), func(t *testing.T) {
 
 			ti := newTestInfra(t).WithOpenShiftClusters().WithSubscriptions()
 			defer ti.done()
@@ -109,13 +105,29 @@ name: cluster
 
 			k := mock_adminactions.NewMockKubeActions(ti.controller)
 			if tt.mocks != nil {
-				fix := mock_frontend.NewMockFixEtcd(ti.controller)
-				tt.mocks(ctx, ti, fix, k, ti.log, ti.env, doc, &operatorv1fake.FakeEtcds{})
+				tt.mocks(ctx, ti, k, ti.log, ti.env, doc, tt.pods, &operatorv1fake.FakeEtcds{
+				Fake: &operatorv1fake.FakeOperatorV1{
+					Fake: &ktesting.Fake{},
+				},
+			})
 			}
 
-			f, err := NewFrontend(ctx, ti.audit, ti.log, ti.env, ti.asyncOperationsDatabase, ti.clusterManagerDatabase, ti.openShiftClustersDatabase, ti.subscriptionsDatabase, nil, api.APIs, &noop.Noop{}, nil, nil, func(*logrus.Entry, env.Interface, *api.OpenShiftCluster) (adminactions.KubeActions, error) {
+			f, err := NewFrontend(ctx,
+				ti.audit,
+				ti.log,
+				ti.env,
+				ti.asyncOperationsDatabase,
+				ti.clusterManagerDatabase,
+				ti.openShiftClustersDatabase,
+				ti.subscriptionsDatabase,
+				nil,
+				api.APIs,
+				&noop.Noop{},
+				nil,
+				nil,
+				func(*logrus.Entry, env.Interface, *api.OpenShiftCluster) (adminactions.KubeActions, error) {
 				return k, nil
-			}, nil, nil)
+			}, nil, ti.enricher)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -125,7 +137,6 @@ name: cluster
 			resp, b, err := ti.request(method,
 				fmt.Sprintf("https://server/admin%s/etcdrecovery?api-version=admin", resourceID),
 				nil, nil)
-				// tt.headers, []byte(`{}`))
 			if err != nil {
 				t.Fatal(err)
 			}

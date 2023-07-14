@@ -26,6 +26,10 @@ func (f *frontend) postAdminOpenShiftClusterEtcdRecovery(w http.ResponseWriter, 
 
 	b, err := f._postAdminOpenShiftClusterEtcdRecovery(ctx, r, log)
 
+	if err == nil {
+		w.Header().Set("Content-Type", "text/plain")
+	}
+
 	adminReply(log, w, nil, b, err)
 }
 
@@ -47,7 +51,7 @@ func (f *frontend) _postAdminOpenShiftClusterEtcdRecovery(ctx context.Context, r
 
 	gvr, err := kubeActions.ResolveGVR("Etcd")
 	if err != nil {
-		return []byte{}, err
+		return []byte{}, api.NewCloudError(http.StatusInternalServerError, api.CloudErrorCodeInternalServerError, "", err.Error())
 	}
 
 	err = validateAdminKubernetesObjects(r.Method, gvr, namespaceEtcds, "cluster")

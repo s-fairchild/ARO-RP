@@ -29,7 +29,7 @@ import (
 const degradedNode = "master-2"
 
 func TestFixEtcd(t *testing.T) {
-	// Context leak is intentional to make use of cancel function
+	// Context leak is intentional to make use of cancel function, and make it to our error check
 	ctx, ctxCancel := context.WithCancel(context.Background())
 	const (
 		mockSubID    = "00000000-0000-0000-0000-000000000000"

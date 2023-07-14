@@ -9,6 +9,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
 	"time"
@@ -54,9 +55,10 @@ const (
 func (f *frontend) fixEtcd(ctx context.Context, log *logrus.Entry, env env.Interface, doc *api.OpenShiftClusterDocument, kubeActions adminactions.KubeActions, etcdcli operatorv1client.EtcdInterface) ([]byte, error) {
 	log.Info("Starting Etcd Recovery now")
 
+	log.Infof("Listing etcd pods now")
 	rawPods, err := kubeActions.KubeList(ctx, "Pod", namespaceEtcds)
 	if err != nil {
-		return []byte{}, err
+		return []byte{}, api.NewCloudError(http.StatusInternalServerError, api.CloudErrorCodeInternalServerError, "", err.Error())
 	}
 
 	pods := &corev1.PodList{}
