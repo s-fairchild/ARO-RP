@@ -32,8 +32,11 @@ import (
 	"github.com/Azure/ARO-RP/pkg/frontend/adminactions"
 )
 
-type FixEtcd interface {
-	Fix(ctx context.Context, log *logrus.Entry, env env.Interface, doc *api.OpenShiftClusterDocument, kubeActions adminactions.KubeActions, etcdcli operatorv1client.EtcdInterface) ([]byte, error)
+type degradedEtcd struct {
+	Node  string
+	Pod   string
+	NewIP string
+	OldIP string
 }
 
 const (
@@ -45,13 +48,6 @@ const (
 	patchOverides         = "unsupportedConfigOverrides:"
 	patchDisableOverrides = `{"useUnsupportedUnsafeNonHANonProductionUnstableEtcd": true}`
 )
-
-type degradedEtcd struct {
-	Node  string
-	Pod   string
-	NewIP string
-	OldIP string
-}
 
 // fixEtcd performs a single master node etcd recovery based on these steps and scenarios:
 // https://docs.openshift.com/container-platform/4.10/backup_and_restore/control_plane_backup_and_restore/replacing-unhealthy-etcd-member.html

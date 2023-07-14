@@ -29,7 +29,6 @@ func (f *frontend) postAdminOpenShiftClusterEtcdRecovery(w http.ResponseWriter, 
 	adminReply(log, w, nil, b, err)
 }
 
-// TODO write integration test that skips f.fixEtcd
 func (f *frontend) _postAdminOpenShiftClusterEtcdRecovery(ctx context.Context, r *http.Request, log *logrus.Entry) ([]byte, error) {
 	resType, resName, resGroupName := chi.URLParam(r, "resourceType"), chi.URLParam(r, "resourceName"), chi.URLParam(r, "resourceGroupName")
 	resourceID := strings.TrimPrefix(r.URL.Path, "/admin")
@@ -66,5 +65,5 @@ func (f *frontend) _postAdminOpenShiftClusterEtcdRecovery(ctx context.Context, r
 		return []byte{}, err
 	}
 
-	return f.etcdFixer.Fix(ctx, log, f.env, doc, kubeActions, operatorcli.OperatorV1().Etcds())
+	return f.fixEtcd(ctx, log, f.env, doc, kubeActions, operatorcli.OperatorV1().Etcds())
 }
