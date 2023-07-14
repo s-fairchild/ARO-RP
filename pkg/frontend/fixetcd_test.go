@@ -94,10 +94,10 @@ func TestFixEtcd(t *testing.T) {
 
 				expectWatchEvent(gomock.Any(), jobBackupEtcd, k, "app", corev1.PodSucceeded, false)
 
-				k.EXPECT().KubeGetPodLogs(ctx, jobBackupEtcd.GetNamespace(), jobBackupEtcd.GetName(), jobBackupEtcd.GetName()).MaxTimes(1).Return([]byte("Backup job doing backup things..."), nil)
+				k.EXPECT().KubeGetPodLogs(ctx, jobBackupEtcd.GetNamespace(), jobBackupEtcd.GetName(), jobBackupEtcd.GetName()).Times(1).Return([]byte("Backup job doing backup things..."), nil)
 
 				propPolicy := metav1.DeletePropagationBackground
-				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobBackupEtcd.GetName(), true, &propPolicy).MaxTimes(1).Return(nil)
+				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobBackupEtcd.GetName(), true, &propPolicy).Times(1).Return(nil)
 
 				// fixPeers
 				// createPrivilegedServiceAccount
@@ -106,10 +106,10 @@ func TestFixEtcd(t *testing.T) {
 				crb := newClusterRoleBinding(serviceAccountName, doc.OpenShiftCluster.Name)
 				scc := newSecurityContextConstraint(serviceAccountName, doc.OpenShiftCluster.Name, kubeServiceAccount)
 
-				k.EXPECT().KubeCreateOrUpdate(ctx, serviceAcc).MaxTimes(1).Return(nil)
-				k.EXPECT().KubeCreateOrUpdate(ctx, clusterRole).MaxTimes(1).Return(nil)
-				k.EXPECT().KubeCreateOrUpdate(ctx, crb).MaxTimes(1).Return(nil)
-				k.EXPECT().KubeCreateOrUpdate(ctx, scc).MaxTimes(1).Return(nil)
+				k.EXPECT().KubeCreateOrUpdate(ctx, serviceAcc).Times(1).Return(nil)
+				k.EXPECT().KubeCreateOrUpdate(ctx, clusterRole).Times(1).Return(nil)
+				k.EXPECT().KubeCreateOrUpdate(ctx, crb).Times(1).Return(nil)
+				k.EXPECT().KubeCreateOrUpdate(ctx, scc).Times(1).Return(nil)
 
 				de, err := findDegradedEtcd(ti.log, pods)
 				if err != nil {
@@ -121,17 +121,17 @@ func TestFixEtcd(t *testing.T) {
 				}
 
 				jobFixPeers := newJobFixPeers(doc.OpenShiftCluster.Name, peerPods, de.Node)
-				k.EXPECT().KubeCreateOrUpdate(ctx, jobFixPeers).MaxTimes(1).Return(nil)
+				k.EXPECT().KubeCreateOrUpdate(ctx, jobFixPeers).Times(1).Return(nil)
 				expectWatchEvent(gomock.Any(), jobFixPeers, k, "app", corev1.PodSucceeded, false)
 
-				k.EXPECT().KubeGetPodLogs(ctx, jobFixPeers.GetNamespace(), jobFixPeers.GetName(), jobFixPeers.GetName()).MaxTimes(1).Return([]byte("Fix peer job fixing peers..."), nil)
-				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobFixPeers.GetName(), true, &propPolicy).MaxTimes(1).Return(nil)
+				k.EXPECT().KubeGetPodLogs(ctx, jobFixPeers.GetNamespace(), jobFixPeers.GetName(), jobFixPeers.GetName()).Times(1).Return([]byte("Fix peer job fixing peers..."), nil)
+				k.EXPECT().KubeDelete(ctx, "Job", namespaceEtcds, jobFixPeers.GetName(), true, &propPolicy).Times(1).Return(nil)
 
 				// cleanup
-				k.EXPECT().KubeDelete(ctx, serviceAcc.GetKind(), serviceAcc.GetNamespace(), serviceAcc.GetName(), true, nil).MaxTimes(1).Return(nil)
-				k.EXPECT().KubeDelete(ctx, scc.GetKind(), scc.GetNamespace(), scc.GetName(), true, nil).MaxTimes(1).Return(nil)
-				k.EXPECT().KubeDelete(ctx, clusterRole.GetKind(), clusterRole.GetNamespace(), clusterRole.GetName(), true, nil).MaxTimes(1).Return(nil)
-				k.EXPECT().KubeDelete(ctx, crb.GetKind(), crb.GetNamespace(), crb.GetName(), true, nil).MaxTimes(1).Return(nil)
+				k.EXPECT().KubeDelete(ctx, serviceAcc.GetKind(), serviceAcc.GetNamespace(), serviceAcc.GetName(), true, nil).Times(1).Return(nil)
+				k.EXPECT().KubeDelete(ctx, scc.GetKind(), scc.GetNamespace(), scc.GetName(), true, nil).Times(1).Return(nil)
+				k.EXPECT().KubeDelete(ctx, clusterRole.GetKind(), clusterRole.GetNamespace(), clusterRole.GetName(), true, nil).Times(1).Return(nil)
+				k.EXPECT().KubeDelete(ctx, crb.GetKind(), crb.GetNamespace(), crb.GetName(), true, nil).Times(1).Return(nil)
 
 				err = codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(&operatorv1fake.FakeEtcds{})
 				if err != nil {
@@ -580,6 +580,7 @@ func expectWatchEvent(ctx gomock.Matcher, o *unstructured.Unstructured, k *mock_
 					Message: message,
 				},
 			})
+			w.Reset()
 		}()
 	}
 }

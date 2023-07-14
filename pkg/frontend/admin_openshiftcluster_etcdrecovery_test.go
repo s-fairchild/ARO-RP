@@ -17,8 +17,10 @@ import (
 	operatorv1fake "github.com/openshift/client-go/operator/clientset/versioned/typed/operator/v1/fake"
 	"github.com/sirupsen/logrus"
 	"github.com/ugorji/go/codec"
+	operatorv1 "github.com/openshift/api/operator/v1"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kschema "k8s.io/apimachinery/pkg/runtime/schema"
 	ktesting "k8s.io/client-go/testing"
 
@@ -131,9 +133,8 @@ func TestAdminEtcdRecovery(t *testing.T) {
 		},
 		{
 			name:                    "fail: ",
-			wantStatusCode:          http.StatusMethodNotAllowed,
+			wantStatusCode:          http.StatusInternalServerError,
 			wantResponseContentType: "application/json",
-			wantError:               "5",
 			doc:                     fakeRecoveryDoc(true, resourceID, resourceName),
 			mocks: func(ctx context.Context, ti *testInfra, k *mock_adminactions.MockKubeActions, log *logrus.Entry, env env.Interface, doc *api.OpenShiftClusterDocument, pods *corev1.PodList, etcdcli operatorv1client.EtcdInterface) {
 				k.EXPECT().ResolveGVR("Etcd").Times(1).Return(&kschema.GroupVersionResource{
@@ -149,59 +150,63 @@ func TestAdminEtcdRecovery(t *testing.T) {
 				k.EXPECT().KubeList(gomock.Any(), "Pod", namespaceEtcds).Times(1).Return(buf.Bytes(), nil)
 
 				// backupEtcd
-				jobBackupEtcd := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
-				k.EXPECT().KubeCreateOrUpdate(gomock.Any(), jobBackupEtcd).Times(1).Return(nil)
-				expectWatchEvent(gomock.Any(), jobBackupEtcd, k, "app", corev1.PodSucceeded, false)()
+				job := createBackupEtcdDataJob(doc.OpenShiftCluster.Name, buildNodeName(doc, degradedNode))
+				k.EXPECT().KubeCreateOrUpdate(gomock.Any(), job).Times(1).Return(nil)
+				expectWatchEvent(gomock.Any(), job, k, "app", corev1.PodSucceeded, false)()
 
-				// call = k.EXPECT().KubeGetPodLogs(gomock.Any(), jobBackupEtcd.GetNamespace(), jobBackupEtcd.GetName(), jobBackupEtcd.GetName()).MaxTimes(1).Return([]byte("Backup job doing backup things..."), nil).After(call)
+				k.EXPECT().KubeGetPodLogs(gomock.Any(), job.GetNamespace(), job.GetName(), job.GetName()).Times(1).Return([]byte("Backup job doing backup things..."), nil)
+				propPolicy := metav1.DeletePropagationBackground
+				log.Printf(string(propPolicy))
+				k.EXPECT().KubeDelete(gomock.Any(), "Job", namespaceEtcds, job.GetName(), true, &propPolicy).MaxTimes(1).Return(nil)
 
-				// propPolicy := metav1.DeletePropagationBackground
-				// k.EXPECT().KubeDelete(gomock.Any(), "Job", namespaceEtcds, jobBackupEtcd.GetName(), true, &propPolicy).MaxTimes(1).Return(nil).After(call)
+				// fixPeers
+				// createPrivilegedServiceAccount
+				serviceAcc := newServiceAccount(serviceAccountName, doc.OpenShiftCluster.Name)
+				clusterRole := newClusterRole(kubeServiceAccount, doc.OpenShiftCluster.Name)
+				crb := newClusterRoleBinding(serviceAccountName, doc.OpenShiftCluster.Name)
+				scc := newSecurityContextConstraint(serviceAccountName, doc.OpenShiftCluster.Name, kubeServiceAccount)
 
-				// // fixPeers
-				// // createPrivilegedServiceAccount
-				// serviceAcc := newServiceAccount(serviceAccountName, doc.OpenShiftCluster.Name)
-				// clusterRole := newClusterRole(kubeServiceAccount, doc.OpenShiftCluster.Name)
-				// crb := newClusterRoleBinding(serviceAccountName, doc.OpenShiftCluster.Name)
-				// scc := newSecurityContextConstraint(serviceAccountName, doc.OpenShiftCluster.Name, kubeServiceAccount)
+				k.EXPECT().KubeCreateOrUpdate(gomock.Any(), serviceAcc).Times(1).Return(nil)
+				k.EXPECT().KubeCreateOrUpdate(gomock.Any(), clusterRole).Times(1).Return(nil)
+				k.EXPECT().KubeCreateOrUpdate(gomock.Any(), crb).Times(1).Return(nil)
+				k.EXPECT().KubeCreateOrUpdate(gomock.Any(), scc).Times(1).Return(nil)
 
-				// k.EXPECT().KubeCreateOrUpdate(gomock.Any(), serviceAcc).MaxTimes(1).Return(nil)
-				// k.EXPECT().KubeCreateOrUpdate(gomock.Any(), clusterRole).MaxTimes(1).Return(nil)
-				// k.EXPECT().KubeCreateOrUpdate(gomock.Any(), crb).MaxTimes(1).Return(nil)
-				// k.EXPECT().KubeCreateOrUpdate(gomock.Any(), scc).MaxTimes(1).Return(nil)
+				de, err := findDegradedEtcd(ti.log, pods)
+				if err != nil {
+					t.Fatal(err)
+				}
+				peerPods, err := getPeerPods(pods.Items, de, doc.OpenShiftCluster.Name)
+				if err != nil {
+					t.Fatal(err)
+				}
 
-				// de, err := findDegradedEtcd(ti.log, pods)
-				// if err != nil {
-				// 	t.Fatal(err)
-				// }
-				// peerPods, err := getPeerPods(pods.Items, de, doc.OpenShiftCluster.Name)
-				// if err != nil {
-				// 	t.Fatal(err)
-				// }
+				job = newJobFixPeers(doc.OpenShiftCluster.Name, peerPods, de.Node)
+				k.EXPECT().KubeCreateOrUpdate(gomock.Any(), job).Times(1).Return(nil)
+				expectWatchEvent(gomock.Any(), job, k, "app", corev1.PodSucceeded, false)()
+				k.EXPECT().KubeGetPodLogs(gomock.Any(), job.GetNamespace(), job.GetName(), job.GetName()).Times(1).Return([]byte("Fix peer job fixing peers..."), nil)
+				k.EXPECT().KubeDelete(gomock.Any(), "Job", namespaceEtcds, job.GetName(), true, &propPolicy).Times(1).Return(nil)
 
-				// jobFixPeers := newJobFixPeers(doc.OpenShiftCluster.Name, peerPods, de.Node)
-				// k.EXPECT().KubeCreateOrUpdate(gomock.Any(), jobFixPeers).MaxTimes(1).Return(nil)
-				// createPodEvent(ctx, jobFixPeers, k, "app", corev1.PodSucceeded, false)
+				// cleanup
+				k.EXPECT().KubeDelete(gomock.Any(), serviceAcc.GetKind(), serviceAcc.GetNamespace(), serviceAcc.GetName(), true, nil).MaxTimes(1).Return(nil)
+				k.EXPECT().KubeDelete(gomock.Any(), scc.GetKind(), scc.GetNamespace(), scc.GetName(), true, nil).Times(1).Return(nil)
+				k.EXPECT().KubeDelete(gomock.Any(), clusterRole.GetKind(), clusterRole.GetNamespace(), clusterRole.GetName(), true, nil).Times(1).Return(nil)
+				k.EXPECT().KubeDelete(gomock.Any(), crb.GetKind(), crb.GetNamespace(), crb.GetName(), true, nil).Times(1).Return(nil)
 
-				// k.EXPECT().KubeGetPodLogs(gomock.Any(), jobFixPeers.GetNamespace(), jobFixPeers.GetName(), jobFixPeers.GetName()).MaxTimes(1).Return([]byte("Fix peer job fixing peers..."), nil)
-				// k.EXPECT().KubeDelete(gomock.Any(), "Job", namespaceEtcds, jobFixPeers.GetName(), true, &propPolicy).MaxTimes(1).Return(nil)
+				buf = &bytes.Buffer{}
+				err = codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(&operatorv1.Etcd{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: resourceName,
+					},
+				})
+				if err != nil {
+					t.Fatalf("%s failed to encode etcd operator, %s", t.Name(), err.Error())
+				}
+				k.EXPECT().KubeGet(gomock.Any(), "Etcd", "", resourceName).Times(1).Return(buf.Bytes(), nil)
 
-				// // cleanup
-				// k.EXPECT().KubeDelete(gomock.Any(), serviceAcc.GetKind(), serviceAcc.GetNamespace(), serviceAcc.GetName(), true, nil).MaxTimes(1).Return(nil)
-				// k.EXPECT().KubeDelete(gomock.Any(), scc.GetKind(), scc.GetNamespace(), scc.GetName(), true, nil).MaxTimes(1).Return(nil)
-				// k.EXPECT().KubeDelete(gomock.Any(), clusterRole.GetKind(), clusterRole.GetNamespace(), clusterRole.GetName(), true, nil).MaxTimes(1).Return(nil)
-				// k.EXPECT().KubeDelete(gomock.Any(), crb.GetKind(), crb.GetNamespace(), crb.GetName(), true, nil).MaxTimes(1).Return(nil)
-
-				// err = codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(&operatorv1fake.FakeEtcds{})
-				// if err != nil {
-				// 	t.Fatal(err)
-				// }
-				// k.EXPECT().KubeGet(gomock.Any(), "Etcd", "", doc.OpenShiftCluster.Name).MaxTimes(1).Return(buf.Bytes(), nil)
-
-				// // delete secrets
-				// for _, prefix := range []string{"etcd-peer-", "etcd-serving-", "etcd-serving-metrics-"} {
-				// 	k.EXPECT().KubeDelete(gomock.Any(), "Secret", namespaceEtcds, prefix+buildNodeName(doc, degradedNode), false, nil)
-				// }
+				// final step
+				for _, prefix := range []string{"etcd-peer-", "etcd-serving-", "etcd-serving-metrics-"} {
+					k.EXPECT().KubeDelete(gomock.Any(), "Secret", namespaceEtcds, prefix+buildNodeName(doc, degradedNode), false, nil).Times(3).Return(nil)
+				}
 			},
 		},
 		// {

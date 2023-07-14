@@ -81,18 +81,19 @@ func (f *frontend) fixEtcd(ctx context.Context, log *logrus.Entry, env env.Inter
 	fixPeersContainerLogs, err := fixPeers(ctx, log, de, pods, kubeActions, doc.OpenShiftCluster.Name)
 	allLogs := append(backupContainerLogs, fixPeersContainerLogs...)
 	if err != nil {
-		return allLogs, err
+		return allLogs, api.NewCloudError(http.StatusInternalServerError, api.CloudErrorCodeInternalServerError, "", err.Error())
 	}
 
 	rawEtcd, err := kubeActions.KubeGet(ctx, "Etcd", "", "cluster")
 	if err != nil {
-		return allLogs, err
+		return allLogs, api.NewCloudError(http.StatusInternalServerError, api.CloudErrorCodeInternalServerError, "", err.Error())
 	}
 
+	log.Info("Getting etcd operating now")
 	etcd := &operatorv1.Etcd{}
 	err = codec.NewDecoderBytes(rawEtcd, &codec.JsonHandle{}).Decode(etcd)
 	if err != nil {
-		return allLogs, err
+		return allLogs, api.NewCloudError(http.StatusInternalServerError, api.CloudErrorCodeInternalServerError, "", err.Error())
 	}
 
 	existingOverrides := etcd.Spec.UnsupportedConfigOverrides.Raw
@@ -106,13 +107,13 @@ func (f *frontend) fixEtcd(ctx context.Context, log *logrus.Entry, env env.Inter
 
 	err = deleteSecrets(ctx, log, kubeActions, de, doc.OpenShiftCluster.Properties.InfraID)
 	if err != nil {
-		return allLogs, err
+		return allLogs, api.NewCloudError(http.StatusInternalServerError, api.CloudErrorCodeInternalServerError, "", err.Error())
 	}
 
 	etcd.Spec.ForceRedeploymentReason = fmt.Sprintf("single-master-recovery-%s", time.Now())
 	err = patchEtcd(ctx, log, etcdcli, etcd, etcd.Spec.ForceRedeploymentReason)
 	if err != nil {
-		return allLogs, err
+		return allLogs, api.NewCloudError(http.StatusInternalServerError, api.CloudErrorCodeInternalServerError, "", err.Error())
 	}
 
 	etcd.Spec.OperatorSpec.UnsupportedConfigOverrides.Raw = existingOverrides
@@ -122,6 +123,8 @@ func (f *frontend) fixEtcd(ctx context.Context, log *logrus.Entry, env env.Inter
 
 // patchEtcd patches the etcd object provided and logs the patch string
 func patchEtcd(ctx context.Context, log *logrus.Entry, etcdcli operatorv1client.EtcdInterface, e *operatorv1.Etcd, patch string) error {
+	log.Infof("Preparing to patch etcd %s with %s", e.Name, patch)
+
 	// must be removed to force redeployment
 	e.CreationTimestamp = metav1.Time{
 		Time: time.Now(),
@@ -133,12 +136,12 @@ func patchEtcd(ctx context.Context, log *logrus.Entry, etcdcli operatorv1client.
 	buf := &bytes.Buffer{}
 	err := codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(e)
 	if err != nil {
-		return err
+		return api.NewCloudError(http.StatusInternalServerError, api.CloudErrorCodeInternalServerError, "", err.Error())
 	}
 
 	_, err = etcdcli.Patch(ctx, e.Name, types.MergePatchType, buf.Bytes(), metav1.PatchOptions{})
 	if err != nil {
-		return err
+		return api.NewCloudError(http.StatusInternalServerError, api.CloudErrorCodeInternalServerError, "", err.Error())
 	}
 	log.Infof("Patched etcd %s with %s", e.Name, patch)
 
@@ -520,6 +523,7 @@ func waitForJobSucceed(ctx context.Context, log *logrus.Entry, watcher watch.Int
 	if err != nil {
 		return cxLogs, err
 	}
+	log.Infof("Successfully collected logs for %s", o.GetName())
 
 	return cxLogs, waitErr
 }
