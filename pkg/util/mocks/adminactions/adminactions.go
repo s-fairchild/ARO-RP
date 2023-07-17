@@ -17,6 +17,7 @@ import (
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	unstructured "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
+	types "k8s.io/apimachinery/pkg/types"
 	watch "k8s.io/apimachinery/pkg/watch"
 )
 
@@ -170,6 +171,26 @@ func (m *MockKubeActions) KubeList(arg0 context.Context, arg1, arg2 string) ([]b
 func (mr *MockKubeActionsMockRecorder) KubeList(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "KubeList", reflect.TypeOf((*MockKubeActions)(nil).KubeList), arg0, arg1, arg2)
+}
+
+// KubePatch mocks base method.
+func (m *MockKubeActions) KubePatch(arg0 context.Context, arg1, arg2, arg3 string, arg4 types.PatchType, arg5 []byte, arg6 v1.PatchOptions, arg7 ...string) ([]byte, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1, arg2, arg3, arg4, arg5, arg6}
+	for _, a := range arg7 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "KubePatch", varargs...)
+	ret0, _ := ret[0].([]byte)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// KubePatch indicates an expected call of KubePatch.
+func (mr *MockKubeActionsMockRecorder) KubePatch(arg0, arg1, arg2, arg3, arg4, arg5, arg6 interface{}, arg7 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1, arg2, arg3, arg4, arg5, arg6}, arg7...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "KubePatch", reflect.TypeOf((*MockKubeActions)(nil).KubePatch), varargs...)
 }
 
 // KubeWatch mocks base method.

@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	ktypes "k8s.io/apimachinery/pkg/types"
 
 	"github.com/Azure/ARO-RP/pkg/api"
 	"github.com/Azure/ARO-RP/pkg/env"
@@ -40,6 +41,7 @@ type KubeActions interface {
 	KubeGetPodLogs(ctx context.Context, namespace, name, containerName string) ([]byte, error)
 	// kubeWatch returns a watch object for the provided label selector key
 	KubeWatch(ctx context.Context, o *unstructured.Unstructured, label string) (watch.Interface, error)
+	KubePatch(ctx context.Context, groupKind, namespace, name string, pt ktypes.PatchType, data []byte, options metav1.PatchOptions, subresources...string) ([]byte, error)
 }
 
 type kubeActions struct {
@@ -169,6 +171,20 @@ func (k *kubeActions) KubeWatch(ctx context.Context, o *unstructured.Unstructure
 	}
 
 	return w, nil
+}
+
+func (k *kubeActions) KubePatch(ctx context.Context, groupKind, namespace, name string, pt ktypes.PatchType, data []byte, options metav1.PatchOptions, subresources...string) ([]byte, error) {
+	gvr, err := k.gvrResolver.Resolve(groupKind, "")
+	if err != nil {
+		return nil, err
+	}
+
+	o, err := k.dyn.Resource(*gvr).Namespace(namespace).Patch(ctx, name, pt, data, options, subresources...)
+	if err != nil {
+		return nil, err
+	}
+
+	return o.MarshalJSON()
 }
 
 func (k *kubeActions) KubeDelete(ctx context.Context, groupKind, namespace, name string, force bool, propagationPolicy *metav1.DeletionPropagation) error {

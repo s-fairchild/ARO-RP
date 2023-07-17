@@ -13,16 +13,18 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	operatorv1 "github.com/openshift/api/operator/v1"
 	operatorv1client "github.com/openshift/client-go/operator/clientset/versioned/typed/operator/v1"
 	operatorv1fake "github.com/openshift/client-go/operator/clientset/versioned/typed/operator/v1/fake"
 	"github.com/sirupsen/logrus"
 	"github.com/ugorji/go/codec"
-	operatorv1 "github.com/openshift/api/operator/v1"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kschema "k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	ktesting "k8s.io/client-go/testing"
+	kruntime "k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/Azure/ARO-RP/pkg/api"
 	"github.com/Azure/ARO-RP/pkg/env"
@@ -71,6 +73,10 @@ func TestAdminEtcdRecovery(t *testing.T) {
 	)
 	ctx := context.Background()
 
+	wantLogs, err := logSeperator([]byte(`log1`), []byte(`log2`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	resourceID := fmt.Sprintf("/subscriptions/%s/resourcegroups/resourceGroup/providers/Microsoft.RedHatOpenShift/openShiftClusters/%s", mockSubID, resourceName)
 	type test struct {
 		name                    string
@@ -132,9 +138,10 @@ func TestAdminEtcdRecovery(t *testing.T) {
 			},
 		},
 		{
-			name:                    "fail: ",
-			wantStatusCode:          http.StatusInternalServerError,
-			wantResponseContentType: "application/json",
+			name:                    "pass: ",
+			wantStatusCode:          http.StatusOK,
+			wantResponseContentType: "text/plain",
+			wantResponse:            wantLogs,
 			doc:                     fakeRecoveryDoc(true, resourceID, resourceName),
 			mocks: func(ctx context.Context, ti *testInfra, k *mock_adminactions.MockKubeActions, log *logrus.Entry, env env.Interface, doc *api.OpenShiftClusterDocument, pods *corev1.PodList, etcdcli operatorv1client.EtcdInterface) {
 				k.EXPECT().ResolveGVR("Etcd").Times(1).Return(&kschema.GroupVersionResource{
@@ -154,7 +161,7 @@ func TestAdminEtcdRecovery(t *testing.T) {
 				k.EXPECT().KubeCreateOrUpdate(gomock.Any(), job).Times(1).Return(nil)
 				expectWatchEvent(gomock.Any(), job, k, "app", corev1.PodSucceeded, false)()
 
-				k.EXPECT().KubeGetPodLogs(gomock.Any(), job.GetNamespace(), job.GetName(), job.GetName()).Times(1).Return([]byte("Backup job doing backup things..."), nil)
+				k.EXPECT().KubeGetPodLogs(gomock.Any(), job.GetNamespace(), job.GetName(), job.GetName()).Times(1).Return([]byte(`log1`), nil)
 				propPolicy := metav1.DeletePropagationBackground
 				log.Printf(string(propPolicy))
 				k.EXPECT().KubeDelete(gomock.Any(), "Job", namespaceEtcds, job.GetName(), true, &propPolicy).MaxTimes(1).Return(nil)
@@ -183,30 +190,49 @@ func TestAdminEtcdRecovery(t *testing.T) {
 				job = newJobFixPeers(doc.OpenShiftCluster.Name, peerPods, de.Node)
 				k.EXPECT().KubeCreateOrUpdate(gomock.Any(), job).Times(1).Return(nil)
 				expectWatchEvent(gomock.Any(), job, k, "app", corev1.PodSucceeded, false)()
-				k.EXPECT().KubeGetPodLogs(gomock.Any(), job.GetNamespace(), job.GetName(), job.GetName()).Times(1).Return([]byte("Fix peer job fixing peers..."), nil)
+				k.EXPECT().KubeGetPodLogs(gomock.Any(), job.GetNamespace(), job.GetName(), job.GetName()).Times(1).Return([]byte(`log2`), nil)
 				k.EXPECT().KubeDelete(gomock.Any(), "Job", namespaceEtcds, job.GetName(), true, &propPolicy).Times(1).Return(nil)
 
 				// cleanup
-				k.EXPECT().KubeDelete(gomock.Any(), serviceAcc.GetKind(), serviceAcc.GetNamespace(), serviceAcc.GetName(), true, nil).MaxTimes(1).Return(nil)
+				k.EXPECT().KubeDelete(gomock.Any(), serviceAcc.GetKind(), serviceAcc.GetNamespace(), serviceAcc.GetName(), true, nil).Times(1).Return(nil)
 				k.EXPECT().KubeDelete(gomock.Any(), scc.GetKind(), scc.GetNamespace(), scc.GetName(), true, nil).Times(1).Return(nil)
 				k.EXPECT().KubeDelete(gomock.Any(), clusterRole.GetKind(), clusterRole.GetNamespace(), clusterRole.GetName(), true, nil).Times(1).Return(nil)
 				k.EXPECT().KubeDelete(gomock.Any(), crb.GetKind(), crb.GetNamespace(), crb.GetName(), true, nil).Times(1).Return(nil)
 
+				// buf.Reset() doesn't work here for some reason
 				buf = &bytes.Buffer{}
-				err = codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(&operatorv1.Etcd{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: resourceName,
-					},
-				})
+				e := &operatorv1.Etcd{
+									ObjectMeta: metav1.ObjectMeta{
+										Name: resourceName,
+									},
+									Spec: operatorv1.EtcdSpec{
+										StaticPodOperatorSpec: operatorv1.StaticPodOperatorSpec{
+											OperatorSpec: operatorv1.OperatorSpec{
+												UnsupportedConfigOverrides: kruntime.RawExtension{
+													Raw: []byte(patchDisableOverrides),
+												},
+											},
+										},
+									},
+								}
+				err = codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(e)
 				if err != nil {
 					t.Fatalf("%s failed to encode etcd operator, %s", t.Name(), err.Error())
 				}
 				k.EXPECT().KubeGet(gomock.Any(), "Etcd", "", resourceName).Times(1).Return(buf.Bytes(), nil)
 
-				// final step
-				for _, prefix := range []string{"etcd-peer-", "etcd-serving-", "etcd-serving-metrics-"} {
-					k.EXPECT().KubeDelete(gomock.Any(), "Secret", namespaceEtcds, prefix+buildNodeName(doc, degradedNode), false, nil).Times(3).Return(nil)
+				if err != nil {
+					t.Fatalf("%s failed to encode etcd operator, %s", t.Name(), err.Error())
 				}
+
+				k.EXPECT().KubePatch(gomock.Any(), "Etcd", namespaceEtcds, resourceName, types.MergePatchType, buf.Bytes(), metav1.PatchOptions{}).Times(1).Return(nil, nil)
+
+				for _, prefix := range []string{"etcd-peer-", "etcd-serving-", "etcd-serving-metrics-"} {
+					k.EXPECT().KubeDelete(gomock.Any(), "Secret", namespaceEtcds, prefix+buildNodeName(doc, degradedNode), false, nil).Times(1).Return(nil)
+				}
+
+				k.EXPECT().KubePatch(gomock.Any(), "Etcd", namespaceEtcds, resourceName, types.MergePatchType, gomock.AssignableToTypeOf([]byte{}), metav1.PatchOptions{}).Times(1).Return(nil, nil)
+				k.EXPECT().KubePatch(gomock.Any(), "Etcd", namespaceEtcds, resourceName, types.MergePatchType, gomock.AssignableToTypeOf([]byte{}), metav1.PatchOptions{}).Times(1).Return(nil, nil)
 			},
 		},
 		// {
@@ -245,7 +271,8 @@ func TestAdminEtcdRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			k := mock_adminactions.NewMockKubeActions(gomock.NewController(t))
+			// k := mock_adminactions.NewMockKubeActions(gomock.NewController(t))
+			k := mock_adminactions.NewMockKubeActions(ti.controller)
 			if tt.mocks != nil {
 				tt.mocks(ctx, ti, k, ti.log, ti.env, tt.doc, newDegradedPods(tt.doc, false, false), &operatorv1fake.FakeEtcds{
 					Fake: &operatorv1fake.FakeOperatorV1{

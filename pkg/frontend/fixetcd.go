@@ -79,7 +79,7 @@ func (f *frontend) fixEtcd(ctx context.Context, log *logrus.Entry, env env.Inter
 	}
 
 	fixPeersContainerLogs, err := fixPeers(ctx, log, de, pods, kubeActions, doc.OpenShiftCluster.Name)
-	allLogs := append(backupContainerLogs, fixPeersContainerLogs...)
+	allLogs, _ := logSeperator(backupContainerLogs, fixPeersContainerLogs)
 	if err != nil {
 		return allLogs, api.NewCloudError(http.StatusInternalServerError, api.CloudErrorCodeInternalServerError, "", err.Error())
 	}
@@ -100,7 +100,7 @@ func (f *frontend) fixEtcd(ctx context.Context, log *logrus.Entry, env env.Inter
 	etcd.Spec.UnsupportedConfigOverrides = kruntime.RawExtension{
 		Raw: []byte(patchDisableOverrides),
 	}
-	err = patchEtcd(ctx, log, etcdcli, etcd, patchDisableOverrides)
+	err = patchEtcd(ctx, log, kubeActions, etcd, patchDisableOverrides)
 	if err != nil {
 		return allLogs, err
 	}
@@ -111,35 +111,44 @@ func (f *frontend) fixEtcd(ctx context.Context, log *logrus.Entry, env env.Inter
 	}
 
 	etcd.Spec.ForceRedeploymentReason = fmt.Sprintf("single-master-recovery-%s", time.Now())
-	err = patchEtcd(ctx, log, etcdcli, etcd, etcd.Spec.ForceRedeploymentReason)
+	err = patchEtcd(ctx, log, kubeActions, etcd, etcd.Spec.ForceRedeploymentReason)
 	if err != nil {
 		return allLogs, api.NewCloudError(http.StatusInternalServerError, api.CloudErrorCodeInternalServerError, "", err.Error())
 	}
 
 	etcd.Spec.OperatorSpec.UnsupportedConfigOverrides.Raw = existingOverrides
+	return allLogs, patchEtcd(ctx, log, kubeActions, etcd, patchOverides+string(etcd.Spec.OperatorSpec.UnsupportedConfigOverrides.Raw))
+}
 
-	return allLogs, patchEtcd(ctx, log, etcdcli, etcd, patchOverides+string(etcd.Spec.OperatorSpec.UnsupportedConfigOverrides.Raw))
+func logSeperator(log1, log2 []byte) ([]byte, error) {
+	logSeperator := "\n" + strings.Repeat("#", 150) + "\n"
+	allLogs := append(log1, []byte(logSeperator)...)
+	allLogs = append(allLogs, log2...)
+
+	buf := &bytes.Buffer{}
+	return buf.Bytes(), codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(allLogs)
 }
 
 // patchEtcd patches the etcd object provided and logs the patch string
-func patchEtcd(ctx context.Context, log *logrus.Entry, etcdcli operatorv1client.EtcdInterface, e *operatorv1.Etcd, patch string) error {
+func patchEtcd(ctx context.Context, log *logrus.Entry, k adminactions.KubeActions, e *operatorv1.Etcd, patch string) error {
 	log.Infof("Preparing to patch etcd %s with %s", e.Name, patch)
-
 	// must be removed to force redeployment
-	e.CreationTimestamp = metav1.Time{
-		Time: time.Now(),
+	if e.Spec.ForceRedeploymentReason != "" {
+		e.CreationTimestamp = metav1.Time{
+			Time: time.Now(),
+		}
+		e.ResourceVersion = ""
+		e.SelfLink = ""
+		e.UID = ""
 	}
-	e.ResourceVersion = ""
-	e.SelfLink = ""
-	e.UID = ""
 
 	buf := &bytes.Buffer{}
 	err := codec.NewEncoder(buf, &codec.JsonHandle{}).Encode(e)
+	// TODO don't return cloud error here since it would double wrap them
 	if err != nil {
 		return api.NewCloudError(http.StatusInternalServerError, api.CloudErrorCodeInternalServerError, "", err.Error())
 	}
-
-	_, err = etcdcli.Patch(ctx, e.Name, types.MergePatchType, buf.Bytes(), metav1.PatchOptions{})
+	_, err = k.KubePatch(ctx, "Etcd", namespaceEtcds, e.Name, types.MergePatchType, buf.Bytes(), metav1.PatchOptions{})
 	if err != nil {
 		return api.NewCloudError(http.StatusInternalServerError, api.CloudErrorCodeInternalServerError, "", err.Error())
 	}
