@@ -122,6 +122,10 @@ func (f *frontend) fixEtcd(ctx context.Context, log *logrus.Entry, env env.Inter
 		return allLogs, api.NewCloudError(http.StatusInternalServerError, api.CloudErrorCodeInternalServerError, "", err.Error())
 	}
 
+	if !f.env.IsLocalDevelopmentMode() {
+		// TODO call fixssh from here somehow
+	}
+
 	return allLogs, nil
 }
 
